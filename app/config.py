@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     cors_origins: list[str] = []
 
+    # Matches docker-compose's local db service. Render's dashboard sets the
+    # real Neon pooled connection string in production — never committed.
+    database_url: str = "postgresql+asyncpg://app:app@localhost:5432/app"
+
 
 @lru_cache
 def get_settings() -> Settings:

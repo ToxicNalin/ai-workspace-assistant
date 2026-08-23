@@ -23,6 +23,10 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      # Overrides .env's localhost-based URL: inside the compose network the
+      # db service is reachable by its service name, not localhost.
+      DATABASE_URL: postgresql+asyncpg://app:app@db:5432/app
     ports:
       - "8000:8000"
     depends_on:

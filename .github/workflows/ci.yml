@@ -7,6 +7,25 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: app
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U app -d app"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://app:app@localhost:5432/app
+
     steps:
       - uses: actions/checkout@v4
 
@@ -22,6 +41,9 @@ jobs:
 
       - name: Mypy
         run: mypy app
+
+      - name: Alembic upgrade head
+        run: alembic upgrade head
 
       - name: Pytest
         run: pytest
