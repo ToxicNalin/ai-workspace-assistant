@@ -8,6 +8,11 @@ class AppError(Exception):
         super().__init__(self.detail)
 
 
+class Unauthorized(AppError):
+    status_code = 401
+    detail = "Not authenticated"
+
+
 class NotFound(AppError):
     status_code = 404
     detail = "Not found"

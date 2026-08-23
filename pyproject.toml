@@ -12,6 +12,10 @@ dependencies = [
     "sqlalchemy==2.0.52",
     "alembic==1.19.1",
     "asyncpg==0.31.0",
+    "bcrypt==5.0.0",
+    "pyjwt==2.13.0",
+    "cryptography==50.0.0",
+    "email-validator==2.3.0",
 ]
 
 [project.optional-dependencies]
@@ -40,10 +44,24 @@ select = ["E", "F", "I", "UP", "B", "SIM", "C4"]
 [tool.ruff.lint.isort]
 known-first-party = ["app"]
 
+[tool.ruff.lint.per-file-ignores]
+# Alembic's own autogenerate output isn't hand-wrapped -- rewrapping it by
+# hand on every future migration would risk transcription errors for no
+# benefit, so only line-length is exempted here.
+"migrations/versions/*.py" = ["E501"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# The engine in app/database/session.py is a module-level singleton whose
+# pooled connections are bound to whichever event loop first used them. The
+# pytest-asyncio default is a fresh loop per test function, which orphans
+# those connections the moment the next test's loop starts ("Event loop is
+# closed") -- pinning both scopes to the session keeps one loop for the
+# engine's whole lifetime, same as it has in the running app.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 testpaths = ["app/tests"]

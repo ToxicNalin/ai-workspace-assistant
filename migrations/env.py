@@ -5,6 +5,10 @@ from alembic import context
 from sqlalchemy import Connection, pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+# Every model module must be imported so it registers its table on
+# Base.metadata before autogenerate compares against it -- importing only
+# app.database.base leaves the metadata empty and produces no-op migrations.
+import app.database.models  # noqa: F401
 from app.config import get_settings
 from app.database.base import Base
 

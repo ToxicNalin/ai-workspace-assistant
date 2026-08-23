@@ -21,6 +21,13 @@ class IngestionJobStatus(StrEnum):
     FAILED = "failed"
 
 
+class InviteStatus(StrEnum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    EXPIRED = "expired"
+    REVOKED = "revoked"
+
+
 # SPEC-v2 §7: upload size cap.
 MAX_UPLOAD_SIZE_BYTES = 5 * 1024 * 1024
 
