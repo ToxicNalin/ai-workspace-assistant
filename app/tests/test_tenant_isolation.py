@@ -15,24 +15,40 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.tests.factories import auth_headers, make_member, make_user, make_workspace, random_email
+from app.tests.factories import (
+    auth_headers,
+    make_document,
+    make_member,
+    make_user,
+    make_workspace,
+    random_email,
+)
 
-# (method, path builder(workspace_id, a_member_user_id), body) for every route
-# that depends on get_workspace_context, directly or via require_role.
-RouteCase = tuple[str, Callable[[uuid.UUID, uuid.UUID], str], dict[str, Any] | None]
+# (method, path builder(workspace_id, a_member_user_id, a_document_id), body)
+# for every route that depends on get_workspace_context, directly or via
+# require_role. Multipart upload is exercised separately below -- it can't
+# share this json-body shape.
+RouteCase = tuple[str, Callable[[uuid.UUID, uuid.UUID, uuid.UUID], str], dict[str, Any] | None]
 TENANT_SCOPED_ROUTES: list[RouteCase] = [
-    ("GET", lambda ws_id, user_id: f"/workspaces/{ws_id}/members", None),
+    ("GET", lambda ws_id, user_id, doc_id: f"/workspaces/{ws_id}/members", None),
     (
         "POST",
-        lambda ws_id, user_id: f"/workspaces/{ws_id}/invite",
+        lambda ws_id, user_id, doc_id: f"/workspaces/{ws_id}/invite",
         {"email": "target@example.com", "role": "member"},
     ),
     (
         "PATCH",
-        lambda ws_id, user_id: f"/workspaces/{ws_id}/members/{user_id}",
+        lambda ws_id, user_id, doc_id: f"/workspaces/{ws_id}/members/{user_id}",
         {"role": "admin"},
     ),
-    ("DELETE", lambda ws_id, user_id: f"/workspaces/{ws_id}/members/{user_id}", None),
+    ("DELETE", lambda ws_id, user_id, doc_id: f"/workspaces/{ws_id}/members/{user_id}", None),
+    ("GET", lambda ws_id, user_id, doc_id: f"/workspaces/{ws_id}/documents", None),
+    (
+        "GET",
+        lambda ws_id, user_id, doc_id: f"/workspaces/{ws_id}/documents/{doc_id}/status",
+        None,
+    ),
+    ("DELETE", lambda ws_id, user_id, doc_id: f"/workspaces/{ws_id}/documents/{doc_id}", None),
 ]
 
 
@@ -41,24 +57,45 @@ async def test_cross_tenant_access_is_404_never_403(
     db_session: AsyncSession,
     client: AsyncClient,
     method: str,
-    build_path: Callable[[uuid.UUID, uuid.UUID], str],
+    build_path: Callable[[uuid.UUID, uuid.UUID, uuid.UUID], str],
     body: dict[str, Any] | None,
 ) -> None:
     admin_a = await make_user(db_session, email=random_email())
     workspace_a = await make_workspace(db_session, owner=admin_a)
+    document_a = await make_document(db_session, workspace=workspace_a, uploaded_by=admin_a)
 
     # A genuine outsider: a member elsewhere, with no relationship at all to
     # workspace_a -- not even a rejected invite.
     outsider = await make_user(db_session, email=random_email())
     await make_workspace(db_session, owner=outsider)
 
-    path = build_path(workspace_a.id, admin_a.id)
+    path = build_path(workspace_a.id, admin_a.id, document_a.id)
     response = await client.request(method, path, json=body, headers=auth_headers(outsider))
 
     assert response.status_code == 404, (
         f"{method} {path} leaked workspace existence: expected 404, got "
         f"{response.status_code}"
     )
+
+
+async def test_upload_to_a_foreign_workspace_is_404_never_403(
+    db_session: AsyncSession, client: AsyncClient
+) -> None:
+    """Upload needs its own case: multipart form data doesn't fit the
+    json-body shape the parametrized cases above share."""
+    admin_a = await make_user(db_session, email=random_email())
+    workspace_a = await make_workspace(db_session, owner=admin_a)
+
+    outsider = await make_user(db_session, email=random_email())
+    await make_workspace(db_session, owner=outsider)
+
+    response = await client.post(
+        f"/workspaces/{workspace_a.id}/documents/upload",
+        files={"file": ("x.txt", b"content", "text/plain")},
+        headers=auth_headers(outsider),
+    )
+
+    assert response.status_code == 404
 
 
 async def test_nonexistent_workspace_is_also_404(

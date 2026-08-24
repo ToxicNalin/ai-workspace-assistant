@@ -30,3 +30,6 @@ Thumbs.db
 
 # Local tooling state
 .claude/
+
+# Local object storage backend (STORAGE_BACKEND=local)
+.data/

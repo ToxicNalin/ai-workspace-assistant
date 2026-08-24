@@ -35,6 +35,16 @@ class Conflict(AppError):
     detail = "Conflict"
 
 
+class UnsupportedMediaType(AppError):
+    status_code = 415
+    detail = "Unsupported or corrupted file type"
+
+
+class PayloadTooLarge(AppError):
+    status_code = 413
+    detail = "File exceeds the maximum upload size"
+
+
 class RateLimited(AppError):
     status_code = 429
     detail = "Rate limited"

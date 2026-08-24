@@ -5,10 +5,15 @@ pgvector for retrieval-augmented generation, and a LangGraph agent that must get
 human approval before any side-effecting action (sending email, creating an event,
 creating tasks).
 
-**Status:** Step 0 — skeleton and deployment. No features yet; this is the
-foundation the rest of the project builds on. See [`docs/SPEC-v2.md`](docs/SPEC-v2.md)
-for the architecture and [`docs/BUILD-ORDER.md`](docs/BUILD-ORDER.md) for the build
-sequence.
+**Status:** Step 3 of 9 — documents upload to object storage and land as `pending`.
+Auth, workspaces, RBAC and the tenant-isolation suite are in place; ingestion, RAG
+and the agent are not yet built. See [`docs/SPEC-v2.md`](docs/SPEC-v2.md) for the
+architecture and [`docs/BUILD-ORDER.md`](docs/BUILD-ORDER.md) for the build sequence.
+
+The highest-value file in the repo is
+[`app/tests/test_tenant_isolation.py`](app/tests/test_tenant_isolation.py): it proves
+that every tenant-scoped route returns **404, never 403**, for a resource in another
+workspace — a 403 would confirm the resource exists and leak tenant structure.
 
 ## Local development
 

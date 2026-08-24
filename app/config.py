@@ -26,6 +26,16 @@ class Settings(BaseSettings):
     # Fernet() rejects anything that isn't 32 url-safe base64 bytes.
     fernet_key: str = "10IAZaiwQMOJNknjWUejIEMlNgV2tEj9Chj22uyWOoE="
 
+    # local | r2 -- local is filesystem-backed, for tests and local dev; r2 is
+    # the production Cloudflare R2 implementation, both behind ObjectStore.
+    storage_backend: Literal["local", "r2"] = "local"
+    local_storage_dir: str = ".data/uploads"
+
+    r2_bucket: str = "ai-workspace-assistant-dev"
+    r2_endpoint_url: str = ""
+    r2_access_key_id: str = ""
+    r2_secret_access_key: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

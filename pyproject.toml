@@ -16,6 +16,8 @@ dependencies = [
     "pyjwt==2.13.0",
     "cryptography==50.0.0",
     "email-validator==2.3.0",
+    "aioboto3==15.5.0",
+    "python-multipart==0.0.32",
 ]
 
 [project.optional-dependencies]
@@ -53,6 +55,12 @@ known-first-party = ["app"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
+
+[[tool.mypy.overrides]]
+# Neither ships py.typed or stubs; botocore's client surface is generated at
+# runtime and isn't meaningfully typeable regardless.
+module = ["aioboto3", "aioboto3.*", "botocore.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

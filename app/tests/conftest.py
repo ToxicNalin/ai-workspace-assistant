@@ -1,11 +1,22 @@
-from collections.abc import AsyncGenerator
+import shutil
+from collections.abc import AsyncGenerator, Iterator
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
+from app.config import get_settings
 from app.database.session import engine, get_db
 from app.main import app
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _clean_local_storage() -> Iterator[None]:
+    storage_dir = get_settings().local_storage_dir
+    shutil.rmtree(storage_dir, ignore_errors=True)
+    yield
+    shutil.rmtree(storage_dir, ignore_errors=True)
 
 
 @pytest_asyncio.fixture
