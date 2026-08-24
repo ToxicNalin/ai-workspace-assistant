@@ -21,6 +21,10 @@ WORKDIR /app
 
 COPY --from=builder /opt/venv /opt/venv
 COPY app ./app
+# The lifespan runs `alembic upgrade head` on boot (SPEC-v2 §7, gotcha 5), so
+# the migration scripts have to be in the runtime image, not just the builder.
+COPY alembic.ini ./alembic.ini
+COPY migrations ./migrations
 
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \

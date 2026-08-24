@@ -1,5 +1,6 @@
 import hashlib
 import uuid
+from collections.abc import Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -86,3 +87,64 @@ def auth_headers(user: User) -> dict[str, str]:
 
 def random_email() -> str:
     return f"{uuid.uuid4().hex}@example.com"
+
+
+def _pdf_escape(text: str) -> str:
+    return text.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
+
+
+def make_pdf_bytes(pages: Sequence[str]) -> bytes:
+    """Build a small but structurally valid multi-page PDF containing real text.
+
+    pypdf can manipulate PDFs but cannot author text content, and checking a
+    binary fixture into the repo would leave a blob nobody can read or adjust.
+    This writes the objects out with a correctly computed xref table, so
+    page-number preservation is tested against a genuine PDF parse rather
+    than a stub.
+    """
+    font_num = 3
+    page_nums = [4 + 2 * index for index in range(len(pages))]
+    content_nums = [5 + 2 * index for index in range(len(pages))]
+
+    kids = " ".join(f"{num} 0 R" for num in page_nums)
+    bodies: dict[int, bytes] = {
+        1: b"<< /Type /Catalog /Pages 2 0 R >>",
+        2: f"<< /Type /Pages /Kids [{kids}] /Count {len(pages)} >>".encode("ascii"),
+        font_num: b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    }
+
+    for text, page_num, content_num in zip(pages, page_nums, content_nums, strict=True):
+        bodies[page_num] = (
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            f"/Contents {content_num} 0 R "
+            f"/Resources << /Font << /F1 {font_num} 0 R >> >> >>"
+        ).encode("ascii")
+
+        instructions = ["BT", "/F1 12 Tf", "14 TL", "72 720 Td"]
+        for line in text.split("\n"):
+            instructions.append(f"({_pdf_escape(line)}) Tj")
+            instructions.append("T*")
+        instructions.append("ET")
+
+        stream = "\n".join(instructions).encode("utf-8")
+        bodies[content_num] = (
+            f"<< /Length {len(stream)} >>\nstream\n".encode("ascii") + stream + b"\nendstream"
+        )
+
+    out = bytearray(b"%PDF-1.4\n")
+    offsets: dict[int, int] = {}
+    for num in sorted(bodies):
+        offsets[num] = len(out)
+        out += f"{num} 0 obj\n".encode("ascii") + bodies[num] + b"\nendobj\n"
+
+    xref_offset = len(out)
+    size = max(bodies) + 1
+    out += f"xref\n0 {size}\n".encode("ascii")
+    out += b"0000000000 65535 f \n"
+    for num in range(1, size):
+        out += f"{offsets[num]:010d} 00000 n \n".encode("ascii")
+    out += (
+        f"trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n"
+    ).encode("ascii")
+
+    return bytes(out)

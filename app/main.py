@@ -4,13 +4,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.router import api_router
 from app.config import get_settings
 from app.exceptions import AppError
+from app.lifespan import lifespan
 from app.middleware.errors import app_error_handler
 from app.utils.logger import configure_logging
 
 settings = get_settings()
 configure_logging(settings.log_level)
 
-app = FastAPI(title="AI Workspace Assistant")
+app = FastAPI(title="AI Workspace Assistant", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

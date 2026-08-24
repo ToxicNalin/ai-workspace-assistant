@@ -55,5 +55,10 @@ async def run_migrations_online() -> None:
 
 if context.is_offline_mode():
     run_migrations_offline()
+# app/lifespan.py runs migrations on boot and hands in its own connection --
+# the one already holding the advisory lock. Opening a second engine here
+# would migrate outside that lock, which is the whole thing it guards against.
+elif (existing_connection := config.attributes.get("connection")) is not None:
+    do_run_migrations(existing_connection)
 else:
     asyncio.run(run_migrations_online())

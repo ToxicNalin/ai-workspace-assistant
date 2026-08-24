@@ -18,6 +18,10 @@ dependencies = [
     "email-validator==2.3.0",
     "aioboto3==15.5.0",
     "python-multipart==0.0.32",
+    "pgvector==0.5.0",
+    "pypdf==6.16.2",
+    "python-docx==1.2.0",
+    "langchain-google-genai==4.3.5",
 ]
 
 [project.optional-dependencies]
@@ -60,6 +64,11 @@ strict = true
 # Neither ships py.typed or stubs; botocore's client surface is generated at
 # runtime and isn't meaningfully typeable regardless.
 module = ["aioboto3", "aioboto3.*", "botocore.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# python-docx installs as the module `docx` and ships no py.typed marker.
+module = ["docx", "docx.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

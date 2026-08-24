@@ -36,6 +36,24 @@ class Settings(BaseSettings):
     r2_access_key_id: str = ""
     r2_secret_access_key: str = ""
 
+    # fake | gemini -- fake is a deterministic offline embedder needing no API
+    # key and no network, so a fresh clone and CI both ingest documents end to
+    # end. Production sets gemini.
+    embedding_provider: Literal["fake", "gemini"] = "fake"
+    # Pinned deliberately rather than left to float: gemini-embedding-2
+    # renormalises automatically at non-default dimensionalities, which
+    # gemini-embedding-001 did not — truncating without renormalising is a
+    # silent recall bug (SPEC-v2 §5).
+    embedding_model: str = "gemini-embedding-2"
+    google_api_key: str = ""
+
+    # Migrations and the ingestion worker both run inside the API process
+    # (SPEC-v2 §3, §6). On by default so `docker compose up` is the whole of
+    # local setup; the lifespan is the only thing that reads these, and the
+    # test client never triggers it.
+    run_migrations_on_startup: bool = True
+    ingestion_worker_enabled: bool = True
+
 
 @lru_cache
 def get_settings() -> Settings:

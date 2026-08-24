@@ -10,6 +10,7 @@ from app.database.models.document import Document
 from app.exceptions import Conflict, NotFound
 from app.storage.base import ObjectStore
 from app.utils.validators import validate_upload
+from app.workers import queue
 
 
 async def list_documents(db: AsyncSession, workspace_id: uuid.UUID) -> Sequence[Document]:
@@ -50,6 +51,16 @@ async def upload_document(
         )
     )
     if existing is not None:
+        # Same bytes, so nothing to store or re-embed. A previous ingestion
+        # that gave up is the one exception: re-uploading is the only way a
+        # user can ask for another go, so let it queue a fresh job.
+        if existing.status == DocumentStatus.FAILED:
+            existing.status = DocumentStatus.PENDING
+            existing.error_message = None
+            await queue.purge_terminal_jobs(db, existing.id)
+            await queue.enqueue(db, workspace_id=workspace_id, document_id=existing.id)
+            await db.commit()
+            await db.refresh(existing)
         return existing, True
 
     document_count = await db.scalar(
@@ -75,6 +86,11 @@ async def upload_document(
         status=DocumentStatus.PENDING,
     )
     db.add(document)
+    # Flushed, not committed: the document row and the job that will process
+    # it land in one transaction, so there can never be a pending document
+    # with no job queued for it.
+    await db.flush()
+    await queue.enqueue(db, workspace_id=workspace_id, document_id=document.id)
     await db.commit()
     await db.refresh(document)
     return document, False
