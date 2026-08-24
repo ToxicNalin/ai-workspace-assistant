@@ -42,7 +42,7 @@ from app.tests.factories import (
 )
 from app.workers import queue
 from app.workers.jobs.ingest_document import NoExtractableText, ingest_document
-from app.workers.runner import IngestionRunner
+from app.workers.runner import IngestionRunner, next_poll_delay
 
 _TEXT = b"First paragraph of the document.\n\nSecond paragraph, with more words in it.\n"
 
@@ -668,3 +668,72 @@ async def test_boot_time_migrations_are_idempotent() -> None:
     """
     await run_migrations()
     await run_migrations()
+
+
+def test_the_idle_poll_delay_doubles_and_then_stops() -> None:
+    """Backoff is a cost control, not a nicety: polling every few seconds for
+    ever would keep Neon awake permanently and spend the free tier's whole
+    compute allowance on finding no work."""
+    assert next_poll_delay(5.0, maximum=30.0) == 10.0
+    assert next_poll_delay(10.0, maximum=30.0) == 20.0
+    assert next_poll_delay(20.0, maximum=30.0) == 30.0
+    assert next_poll_delay(30.0, maximum=30.0) == 30.0
+
+
+async def test_startup_reclaim_unsticks_a_document_left_processing(
+    db_session: AsyncSession, client: AsyncClient
+) -> None:
+    """A process killed mid-job leaves its document at `processing`, so the UI
+    shows a spinner for work nothing is doing. Booting puts both the job and
+    the document back to `pending`, which is the truth."""
+    user = await make_user(db_session, email=random_email())
+    workspace = await make_workspace(db_session, owner=user)
+    document_id = await _upload(client, user, workspace)
+
+    claimed = await queue.claim_next(db_session)
+    assert claimed is not None
+    await db_session.execute(
+        update(Document).where(Document.id == document_id).values(status=DocumentStatus.PROCESSING)
+    )
+    await db_session.execute(
+        update(IngestionJob)
+        .where(IngestionJob.id == claimed.id)
+        .values(lease_until=text("now() - interval '1 hour'"))
+    )
+    await db_session.commit()
+
+    reclaimed = await queue.reclaim_expired(db_session)
+
+    assert reclaimed == 1
+    job = await db_session.get(IngestionJob, claimed.id)
+    assert job is not None
+    await db_session.refresh(job)
+    assert job.status == IngestionJobStatus.PENDING
+    assert job.lease_until is None
+    # Left alone deliberately -- claim_next counts the attempt when the job is
+    # actually picked up again, and counting one crash twice would retire the
+    # document early.
+    assert job.attempts == 1
+
+    document = await db_session.get(Document, document_id)
+    assert document is not None
+    await db_session.refresh(document)
+    assert document.status == DocumentStatus.PENDING
+
+
+async def test_reclaim_leaves_a_job_whose_lease_still_holds_alone(
+    db_session: AsyncSession, client: AsyncClient
+) -> None:
+    """A live worker's job must not be yanked out from under it."""
+    user = await make_user(db_session, email=random_email())
+    workspace = await make_workspace(db_session, owner=user)
+    await _upload(client, user, workspace)
+    claimed = await queue.claim_next(db_session)
+    assert claimed is not None
+
+    assert await queue.reclaim_expired(db_session) == 0
+
+    job = await db_session.get(IngestionJob, claimed.id)
+    assert job is not None
+    await db_session.refresh(job)
+    assert job.status == IngestionJobStatus.RUNNING

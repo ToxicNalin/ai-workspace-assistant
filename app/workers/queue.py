@@ -87,6 +87,45 @@ async def claim_next(db: AsyncSession) -> IngestionJob | None:
     return job
 
 
+async def reclaim_expired(db: AsyncSession) -> int:
+    """Return every job whose lease has lapsed to the queue. Reports how many.
+
+    claim_next already reclaims these one at a time, so this is not needed for
+    correctness -- it is run once at startup for honesty. A process that died
+    mid-job leaves its document sitting at `processing`, and the UI shows the
+    user a spinner for work that nothing is doing. This puts both the job and
+    the document back to `pending`, which is the truth.
+
+    `attempts` is deliberately left alone: claim_next increments it when the
+    job is actually picked up again, and counting the same crash twice would
+    retire the document early.
+    """
+    result = await db.execute(
+        update(IngestionJob)
+        .where(
+            IngestionJob.status == IngestionJobStatus.RUNNING,
+            IngestionJob.lease_until < text("now()"),
+        )
+        .values(status=IngestionJobStatus.PENDING.value, lease_until=None)
+        .returning(IngestionJob.document_id)
+        .execution_options(synchronize_session=False)
+    )
+    document_ids = list(result.scalars().all())
+
+    if document_ids:
+        await db.execute(
+            update(Document)
+            .where(
+                Document.id.in_(document_ids),
+                Document.status == DocumentStatus.PROCESSING,
+            )
+            .values(status=DocumentStatus.PENDING.value)
+        )
+
+    await db.commit()
+    return len(document_ids)
+
+
 async def heartbeat(db: AsyncSession, job_id: uuid.UUID) -> None:
     """Push the lease out while the job is still being worked on."""
     await db.execute(

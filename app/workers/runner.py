@@ -6,12 +6,28 @@ import uuid
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai.provider import get_embedder
-from app.constants import INGESTION_HEARTBEAT_SECONDS, INGESTION_POLL_SECONDS
+from app.constants import (
+    INGESTION_HEARTBEAT_SECONDS,
+    INGESTION_MAX_POLL_SECONDS,
+    INGESTION_POLL_SECONDS,
+)
 from app.storage.base import get_object_store
 from app.workers import queue
 from app.workers.jobs.ingest_document import ingest_document
 
 logger = logging.getLogger(__name__)
+
+
+def next_poll_delay(current: float, *, maximum: float) -> float:
+    """Double the idle wait, up to a ceiling.
+
+    Polling at a fixed few seconds would hold Neon awake around the clock and
+    spend the 100 CU-hours/month the free tier allows on finding nothing
+    (SPEC-v2 §7). The cost is latency on the first upload after a quiet spell,
+    which is bounded by the ceiling and is in any case dwarfed by the cold
+    start that upload already pays for.
+    """
+    return min(current * 2, maximum)
 
 
 class IngestionRunner:
@@ -28,9 +44,11 @@ class IngestionRunner:
         session_factory: async_sessionmaker[AsyncSession],
         *,
         poll_seconds: float = INGESTION_POLL_SECONDS,
+        max_poll_seconds: float = INGESTION_MAX_POLL_SECONDS,
     ) -> None:
         self._session_factory = session_factory
         self._poll_seconds = poll_seconds
+        self._max_poll_seconds = max_poll_seconds
         self._stopping = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
 
@@ -51,6 +69,9 @@ class IngestionRunner:
         logger.info("ingestion runner stopped")
 
     async def _loop(self) -> None:
+        await self._reclaim_on_startup()
+        idle_delay = self._poll_seconds
+
         while not self._stopping.is_set():
             try:
                 did_work = await self._drain_one()
@@ -62,8 +83,26 @@ class IngestionRunner:
                 logger.exception("ingestion runner iteration failed")
                 did_work = False
 
-            if not did_work:
-                await self._wait(self._poll_seconds)
+            if did_work:
+                idle_delay = self._poll_seconds
+            else:
+                await self._wait(idle_delay)
+                idle_delay = next_poll_delay(idle_delay, maximum=self._max_poll_seconds)
+
+    async def _reclaim_on_startup(self) -> None:
+        """Whatever the last process was doing when it died is this one's
+        problem. Failing here must not stop the runner from starting."""
+        try:
+            async with self._session_factory() as db:
+                reclaimed = await queue.reclaim_expired(db)
+        except Exception:
+            logger.exception("startup reclaim failed")
+            return
+
+        if reclaimed:
+            logger.info(
+                "reclaimed jobs abandoned by a dead process", extra={"count": reclaimed}
+            )
 
     async def _wait(self, seconds: float) -> None:
         """Sleep, but wake immediately when asked to stop."""

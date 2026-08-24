@@ -60,5 +60,10 @@ INGESTION_HEARTBEAT_SECONDS = 60
 # set, rather than retried forever (SPEC-v2 §3).
 MAX_INGESTION_ATTEMPTS = 3
 
-# How long the runner waits before polling again when it found no work.
+# How long the runner waits before polling again when it found no work, and
+# the ceiling that wait backs off to. A fixed short poll would keep Neon awake
+# permanently and burn the 100 CU-hours/month the free tier allows -- SPEC-v2
+# §7 warns against pinging the *database* even once a minute, and scale-to-zero
+# is what keeps the project inside the budget.
 INGESTION_POLL_SECONDS = 5.0
+INGESTION_MAX_POLL_SECONDS = 30.0
