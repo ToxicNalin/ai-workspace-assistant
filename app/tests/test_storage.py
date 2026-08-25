@@ -22,7 +22,10 @@ from app.storage.local import LocalObjectStore
 from app.storage.s3 import S3ObjectStore
 from app.utils.validators import MAX_KEY_COMPONENT_CHARS, safe_key_component
 
-SUPABASE_ENDPOINT = "https://abcdefghijklm.supabase.co/storage/v1/s3"
+# The shape Supabase issues: the project ref is a subdomain of
+# storage.supabase.co, and the S3 API lives under a path on it. Both halves
+# matter -- the path is why virtual-host addressing cannot work here.
+SUPABASE_ENDPOINT = "https://abcdefghijklm.storage.supabase.co/storage/v1/s3"
 R2_ENDPOINT = "https://0123456789abcdef.r2.cloudflarestorage.com"
 
 
@@ -62,7 +65,7 @@ async def test_the_bucket_goes_in_the_path_not_the_hostname(
     url = await store.signed_url("workspace/report.pdf")
     parts = urlsplit(url)
 
-    assert parts.hostname == "abcdefghijklm.supabase.co"
+    assert parts.hostname == "abcdefghijklm.storage.supabase.co"
     assert "documents" not in (parts.hostname or ""), "bucket must not be a subdomain"
     assert parts.path == "/storage/v1/s3/documents/workspace/report.pdf"
 
