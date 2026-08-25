@@ -9,6 +9,7 @@ from sqlalchemy import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
+from app.ai.agent.checkpointer import close_checkpointer, setup_checkpointer
 from app.config import get_settings
 from app.database.session import async_session_factory
 from app.workers.runner import IngestionRunner
@@ -65,6 +66,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if settings.run_migrations_on_startup:
         await run_migrations()
 
+    # Creates the LangGraph checkpoint tables if they are not there yet. Done
+    # at boot rather than lazily so the first person to use the agent does not
+    # pay for a DDL round trip, and so a broken database fails the deploy
+    # rather than one request.
+    await setup_checkpointer()
+
     runner: IngestionRunner | None = None
     if settings.ingestion_worker_enabled:
         runner = IngestionRunner(async_session_factory)
@@ -75,3 +82,4 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         if runner is not None:
             await runner.stop()
+        await close_checkpointer()

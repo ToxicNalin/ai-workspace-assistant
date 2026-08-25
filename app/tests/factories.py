@@ -6,12 +6,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.jwt import create_access_token
 from app.auth.password import hash_password
-from app.constants import DocumentStatus, WorkspaceRole
+from app.constants import (
+    DocumentStatus,
+    PendingActionStatus,
+    PendingActionType,
+    WorkspaceRole,
+)
 from app.database.models.chat import ChatThread
 from app.database.models.document import Document
 from app.database.models.membership import WorkspaceMember
+from app.database.models.pending_action import PendingAction
 from app.database.models.user import User
 from app.database.models.workspace import Workspace
+from app.services.payload import hash_payload
 
 
 async def make_user(
@@ -215,3 +222,31 @@ async def make_chat_thread(
     await db.commit()
     await db.refresh(thread)
     return thread
+
+
+async def make_pending_action(
+    db: AsyncSession,
+    *,
+    workspace: Workspace,
+    thread: ChatThread,
+    user: User,
+) -> PendingAction:
+    payload = {
+        "type": "send_email",
+        "recipients": [{"user_id": str(user.id), "name": user.name, "email": user.email}],
+        "subject": "Existing proposal",
+        "body": "Body.",
+    }
+    action = PendingAction(
+        workspace_id=workspace.id,
+        thread_id=thread.id,
+        type=PendingActionType.SEND_EMAIL,
+        payload=payload,
+        payload_hash=hash_payload(payload),
+        status=PendingActionStatus.PENDING,
+        initiated_by=user.id,
+    )
+    db.add(action)
+    await db.commit()
+    await db.refresh(action)
+    return action

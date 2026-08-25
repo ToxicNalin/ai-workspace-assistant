@@ -21,6 +21,7 @@ from app.tests.factories import (
     make_chat_thread,
     make_document,
     make_member,
+    make_pending_action,
     make_user,
     make_workspace,
     random_email,
@@ -40,6 +41,7 @@ class Victim:
     member_id: uuid.UUID
     document_id: uuid.UUID
     thread_id: uuid.UUID
+    action_id: uuid.UUID
 
 
 # One case for every route that depends on get_workspace_context, directly or
@@ -75,6 +77,21 @@ TENANT_SCOPED_ROUTES: list[RouteCase] = [
         lambda v: f"/workspaces/{v.workspace_id}/chat/threads/{v.thread_id}/history",
         None,
     ),
+    # Step 6. The agent can propose actions and read the whole corpus, and the
+    # approval routes decide whether something touches the world outside this
+    # process -- the two most consequential things to get tenant scoping wrong.
+    (
+        "POST",
+        lambda v: f"/workspaces/{v.workspace_id}/agent",
+        {"message": "email the team"},
+    ),
+    ("GET", lambda v: f"/workspaces/{v.workspace_id}/pending-actions", None),
+    (
+        "POST",
+        lambda v: f"/workspaces/{v.workspace_id}/pending-actions/{v.action_id}/decide",
+        {"decision": "approve", "payload_hash": "0" * 64},
+    ),
+    ("GET", lambda v: f"/workspaces/{v.workspace_id}/audit-log", None),
 ]
 
 
@@ -90,6 +107,9 @@ async def test_cross_tenant_access_is_404_never_403(
     workspace_a = await make_workspace(db_session, owner=admin_a)
     document_a = await make_document(db_session, workspace=workspace_a, uploaded_by=admin_a)
     thread_a = await make_chat_thread(db_session, workspace=workspace_a, user=admin_a)
+    action_a = await make_pending_action(
+        db_session, workspace=workspace_a, thread=thread_a, user=admin_a
+    )
 
     # A genuine outsider: a member elsewhere, with no relationship at all to
     # workspace_a -- not even a rejected invite.
@@ -101,6 +121,7 @@ async def test_cross_tenant_access_is_404_never_403(
         member_id=admin_a.id,
         document_id=document_a.id,
         thread_id=thread_a.id,
+        action_id=action_a.id,
     )
     path = build_path(victim)
     response = await client.request(method, path, json=body, headers=auth_headers(outsider))

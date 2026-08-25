@@ -55,6 +55,13 @@ class Settings(BaseSettings):
     # swapping to OpenAI is this one string (SPEC-v2 D18).
     llm_model: str = "google_genai:gemini-2.5-flash"
 
+    # memory | postgres -- where LangGraph keeps the agent's paused state.
+    # Production uses postgres so an approval left overnight survives the free
+    # tier spinning down. Tests use memory: the checkpointer commits on its own
+    # connections, outside the per-test rollback, so a Postgres one would
+    # accumulate checkpoint rows in the database run after run.
+    agent_checkpointer: Literal["memory", "postgres"] = "memory"
+
     # Migrations and the ingestion worker both run inside the API process
     # (SPEC-v2 §3, §6). On by default so `docker compose up` is the whole of
     # local setup; the lifespan is the only thing that reads these, and the

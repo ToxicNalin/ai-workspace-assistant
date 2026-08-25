@@ -1,8 +1,12 @@
 from functools import lru_cache
+from typing import TYPE_CHECKING
 
 from app.ai.chat_model import ChatModel
 from app.ai.embeddings.embedder import Embedder
 from app.config import get_settings
+
+if TYPE_CHECKING:
+    from langchain_core.language_models import BaseChatModel
 
 
 @lru_cache
@@ -38,3 +42,23 @@ def get_chat_model() -> ChatModel:
     from app.ai.chat_model import FakeChatModel
 
     return FakeChatModel()
+
+
+@lru_cache
+def get_agent_model() -> "BaseChatModel":
+    """The tool-calling model the LangGraph agent runs on.
+
+    Separate from get_chat_model() because create_agent needs a real
+    BaseChatModel that can emit tool calls, which the narrow ChatModel protocol
+    used by plain RAG chat deliberately cannot.
+    """
+    settings = get_settings()
+
+    if settings.llm_provider == "gemini":
+        from langchain.chat_models import init_chat_model
+
+        return init_chat_model(settings.llm_model, api_key=settings.google_api_key)
+
+    from app.ai.agent.fake_model import KeywordAgentModel
+
+    return KeywordAgentModel()

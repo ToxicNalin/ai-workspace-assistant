@@ -23,6 +23,12 @@ dependencies = [
     "python-docx==1.2.0",
     "langchain-google-genai==4.3.5",
     "langchain==1.3.16",
+    "langgraph==1.2.11",
+    # Brings psycopg3 alongside asyncpg. Two Postgres drivers in one image is
+    # not lovely, but AsyncPostgresSaver is psycopg-only and it is what lets a
+    # pending approval survive the free tier spinning down mid-decision.
+    "langgraph-checkpoint-postgres==3.1.2",
+    "psycopg[binary,pool]==3.3.4",
     "pyyaml==6.0.3",
 ]
 

@@ -5,12 +5,14 @@ pgvector for retrieval-augmented generation, and a LangGraph agent that must get
 human approval before any side-effecting action (sending email, creating an event,
 creating tasks).
 
-**Status:** Step 5 of 9 — you can ask a question over your documents and get a
-grounded answer with citations. Auth, workspaces, RBAC, the tenant-isolation suite,
-the ingestion queue and hybrid retrieval are in place; the agent and its approval
-gate are not yet built. See [`docs/SPEC-v2.md`](docs/SPEC-v2.md) for the
-architecture and [`docs/BUILD-ORDER.md`](docs/BUILD-ORDER.md) for the build
-sequence.
+**Status:** Step 6 of 9 — the agent and its approval gate are in. Asking the agent
+to email the team produces a pending action that a human must approve before
+anything happens, and an action naming anyone outside the workspace is refused
+before a human ever sees it. Auth, workspaces, RBAC, the tenant-isolation suite,
+the ingestion queue, hybrid retrieval and RAG chat are in place; the side effects
+themselves (real email, `.ics`, tasks) arrive in Step 7. See
+[`docs/SPEC-v2.md`](docs/SPEC-v2.md) for the architecture and
+[`docs/BUILD-ORDER.md`](docs/BUILD-ORDER.md) for the build sequence.
 
 The highest-value file in the repo is
 [`app/tests/test_tenant_isolation.py`](app/tests/test_tenant_isolation.py): it proves
@@ -89,22 +91,73 @@ It runs in CI as a non-blocking job.
 
 ## Security model
 
-Retrieved document text is untrusted input, and the defences against it are
-structural rather than aspirational:
+This is the part of the project worth reading. Document text is untrusted input,
+the model is downstream of it, and the agent can propose actions — so the
+defences are structural rather than aspirational. There are four, and they do
+different jobs:
 
-- Retrieved chunks are assembled into a **user-role** message, never the system
-  prompt. Content in a system message reads to the model as the operator
-  speaking; in a user message the system prompt above it retains the authority to
-  say how it must be treated.
-- The system prompt is a plain constant with no interpolation of any kind, so
-  there is no mechanism by which document text could enter it.
-- Chunk text is escaped before it is delimited, so a document containing
-  `</excerpt>` cannot close the block early and have what follows read as
-  trusted.
-- Every tenant-scoped query filters by `workspace_id`, and cross-tenant access
-  returns **404, never 403** — a 403 would confirm the resource exists.
+**1. Retrieved text goes in a user-role message, never the system prompt.**
+Content in a system message reads to the model as the operator speaking. In a
+user message it is plainly the user's material, and the system prompt above it
+keeps the authority to say how it must be treated. The system prompt is a plain
+constant with no interpolation, so there is no mechanism by which document text
+could enter it. Chunk text is also escaped before delimiting, so a document
+containing `</excerpt>` cannot close the block early.
 
-Two later steps complete this: server-side recipient resolution and the
-payload-hash-bound approval gate (Step 6).
+**2. The system prompt says delimited content is data, never instructions.**
+The weakest of the four and the only one that depends on the model cooperating —
+but it is free, and it makes the correct behaviour the path of least resistance.
+
+**3. Recipients, guests and assignees are resolved server-side.** The model
+names a person; the server looks that name up in `workspace_members` and refuses
+anyone who is not a current member. The model never supplies an address. This is
+the one that removes the exfiltration channel rather than narrowing it — without
+it, a poisoned PDF gets an approval dialogue showing a plausible subject line
+next to a plausible address, and somebody eventually clicks it.
+
+**4. Every side-effecting action stops for a human, bound to a payload hash.**
+The approval is tied to a SHA-256 of the exact payload the reviewer was shown.
+The server re-hashes what it holds at decision time and refuses if they differ.
+Without that the gate is theatre: a dialogue saying "email Alice" followed by a
+server that sends whatever the row happens to contain when the click lands. On
+approval the tool is resumed with the server's resolved payload, so *seen*,
+*hashed* and *executed* are one object rather than three.
+
+Plus tenant scoping throughout: every tenant-scoped query filters by
+`workspace_id`, and cross-tenant access returns **404, never 403** — a 403 would
+confirm the resource exists.
+
+### The tests that prove it
+
+- [`app/tests/test_prompt_injection.py`](app/tests/test_prompt_injection.py) —
+  a poisoned document instructing the agent to email an outside address. Every
+  test here **assumes the model has already been compromised**: the scripted
+  model does exactly what the attacker asked, with no resistance. A test that
+  feeds a real model an injection and hopes it declines is measuring the model,
+  and that answer changes with every release. Assuming full cooperation with the
+  attacker and asserting the server still refuses measures what this repo built.
+- [`app/tests/test_agent_approval.py`](app/tests/test_agent_approval.py) — an
+  interrupt creates a pending action; approving twice executes once; rejecting
+  executes nothing; a payload mutated after being displayed is refused; a
+  non-admin cannot approve; an edit may reword a message but may not redirect it.
+- [`app/tests/test_tenant_isolation.py`](app/tests/test_tenant_isolation.py) —
+  every tenant-scoped route, including the agent and approval routes.
+
+## The agent
+
+Built with `create_agent` and `HumanInTheLoopMiddleware`. The interrupt policy is
+a whitelist of the safe thing rather than a blacklist of the dangerous ones: the
+read-only `search_documents` is the only tool that runs unattended, so a tool
+added later without an explicit entry interrupts by default rather than executing
+silently.
+
+The graph is compiled per request so the search tool can close over the caller's
+workspace id. That costs a compile per turn and buys a property worth more than
+the cycles: the workspace the agent can read is fixed by the caller, not carried
+in state where a tool argument or a crafted document could reach it.
+
+Paused approvals live in Postgres via `AsyncPostgresSaver`, in the same Neon
+database as everything else. An approval waiting on a human will routinely
+outlive the free tier's fifteen-minute idle spin-down, so it has to.
 
 More to come as each build step lands — see `docs/BUILD-ORDER.md`.

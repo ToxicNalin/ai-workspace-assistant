@@ -96,3 +96,37 @@ class ChatRole(StrEnum):
     USER = "user"
     ASSISTANT = "assistant"
     TOOL = "tool"
+
+
+class PendingActionType(StrEnum):
+    SEND_EMAIL = "send_email"
+    CREATE_EVENT = "create_event"
+    CREATE_TASKS = "create_tasks"
+
+
+class PendingActionStatus(StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    EXECUTED = "executed"
+    # The server refused to even offer this action for approval, because the
+    # model named a recipient that is not a member of the workspace (D21).
+    # Recorded rather than discarded: a refusal is the interesting event.
+    REFUSED = "refused"
+
+
+class AuditAction(StrEnum):
+    ACTION_PROPOSED = "action.proposed"
+    ACTION_APPROVED = "action.approved"
+    ACTION_REJECTED = "action.rejected"
+    ACTION_EXECUTED = "action.executed"
+    ACTION_REFUSED = "action.refused"
+    APPROVAL_HASH_MISMATCH = "action.hash_mismatch"
+
+
+# The read-only tool the agent may call without asking anyone (SPEC-v2 §5).
+AUTO_APPROVED_TOOL = "search_documents"
+
+# How many agent turns may run before we stop. A model that loops through
+# tool calls is a bill, and on a free tier it is the whole bill.
+MAX_AGENT_STEPS = 8
