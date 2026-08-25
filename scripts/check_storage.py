@@ -227,10 +227,17 @@ async def main() -> int:
                 print("  Also check the key belongs to this project: the endpoint above")
                 print("  names the project ref it expects.")
 
-        elif code in {"InvalidAccessKeyId", "AccessDenied", "403"}:
-            print("\n  The endpoint answered but rejected the credentials. Re-copy the")
-            print("  access key id and secret; the secret is shown once, so a truncated")
-            print("  paste is the usual cause.")
+        elif code == "InvalidAccessKeyId":
+            print("\n  The provider does not recognise S3_ACCESS_KEY_ID at all -- so this")
+            print("  is the id, not the secret. Usually the key was deleted and replaced,")
+            print("  or it belongs to a different project than the endpoint above.")
+            print("  Worth knowing: this is a different answer from SignatureDoesNotMatch,")
+            print("  which means the id IS recognised and only the secret is wrong.")
+
+        elif code in {"AccessDenied", "403"}:
+            print("\n  The credentials are valid but not allowed to do this. Check the")
+            print("  key's scope in the dashboard -- a key restricted to one bucket")
+            print("  fails this way against any other.")
 
         return 1
 
