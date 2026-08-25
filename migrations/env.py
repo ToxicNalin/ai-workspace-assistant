@@ -1,8 +1,10 @@
 import asyncio
+from itertools import chain
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import Connection, pool
+from alembic.runtime.environment import NameFilterParentNames, NameFilterType
+from sqlalchemy import CheckConstraint, Connection, pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 # Every model module must be imported so it registers its table on
@@ -29,13 +31,66 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_name=include_name,
     )
     with context.begin_transaction():
         context.run_migrations()
 
 
+def _type_bound_check_constraint_names() -> set[str]:
+    """The CHECK constraints SQLAlchemy generates on our behalf from Enum types.
+
+    Derived from the metadata rather than hardcoded, so a new str_enum column
+    is covered automatically.
+    """
+    names: set[str] = set()
+    for table in Base.metadata.tables.values():
+        candidates = chain(table.constraints, *(column.constraints for column in table.columns))
+        for constraint in candidates:
+            if (
+                isinstance(constraint, CheckConstraint)
+                and getattr(constraint, "_type_bound", False)
+                and constraint.name
+            ):
+                names.add(str(constraint.name))
+    return names
+
+
+TYPE_BOUND_CHECK_CONSTRAINTS = _type_bound_check_constraint_names()
+
+
+def include_name(
+    name: str | None,
+    type_: NameFilterType,
+    parent_names: NameFilterParentNames,
+) -> bool:
+    """Keep autogenerate away from the CHECK constraints the Enum type creates.
+
+    `str_enum()` uses native_enum=False + create_constraint=True, so SQLAlchemy
+    attaches the CHECK constraint itself and marks it `_type_bound`. Alembic's
+    own `all_table_check_constraints()` then deliberately excludes type-bound
+    constraints from the *model* side of the comparison -- while Postgres of
+    course still reflects them back on the *database* side. The two sides can
+    never agree, so every autogenerate run proposes dropping all of them.
+
+    That noise had to be deleted by hand from migrations 0003 through 0006,
+    which is tedious and, worse, risks one day taking a genuine constraint drop
+    with it. Filtering the reflected side to match what alembic already does to
+    the model side fixes the cause, and makes `alembic check` usable as a real
+    drift detector.
+
+    Note this is include_name, not include_object: the model-side constraints
+    are gone before any object filter would see them.
+    """
+    return not (type_ == "check_constraint" and name in TYPE_BOUND_CHECK_CONSTRAINTS)
+
+
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        include_name=include_name,
+    )
     with context.begin_transaction():
         context.run_migrations()
 

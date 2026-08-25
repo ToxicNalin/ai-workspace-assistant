@@ -7,7 +7,10 @@ Postgres, in the same Neon database as everything else (SPEC-v2 §5). No extra
 service, and an approval left overnight is still there in the morning.
 """
 
+import asyncio
 import logging
+import sys
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
@@ -20,10 +23,59 @@ _saver: BaseCheckpointSaver | None = None  # type: ignore[type-arg]
 _pool: object | None = None
 
 
+# asyncpg and libpq spell the same connection options differently, and Neon
+# hands out a URL written for whichever driver you told it about. Swapping the
+# scheme is not enough: psycopg rejects the whole URI on an unknown query
+# parameter, so `?ssl=require` fails to connect rather than being ignored.
+_QUERY_TRANSLATIONS: dict[str, str] = {"ssl": "sslmode"}
+_SSL_VALUE_TRANSLATIONS: dict[str, str] = {"true": "require", "false": "disable"}
+
+
 def _psycopg_conninfo(database_url: str) -> str:
-    """AsyncPostgresSaver speaks psycopg3; the rest of the app speaks asyncpg.
-    Same database, different driver prefix."""
-    return database_url.replace("postgresql+asyncpg://", "postgresql://")
+    """Rewrite the app's asyncpg URL into one libpq will accept.
+
+    AsyncPostgresSaver speaks psycopg3 while the rest of the app speaks
+    asyncpg, so the same database is reached through two drivers that disagree
+    about parameter names.
+    """
+    parts = urlsplit(database_url)
+    scheme = parts.scheme.split("+", 1)[0]
+
+    translated: list[tuple[str, str]] = []
+    for key, value in parse_qsl(parts.query, keep_blank_values=True):
+        if key == "ssl":
+            value = _SSL_VALUE_TRANSLATIONS.get(value.lower(), value)
+        translated.append((_QUERY_TRANSLATIONS.get(key, key), value))
+
+    return urlunsplit(
+        (scheme, parts.netloc, parts.path, urlencode(translated), parts.fragment)
+    )
+
+
+def _require_compatible_event_loop() -> None:
+    """Fail fast and legibly on Windows' default event loop.
+
+    psycopg's async mode cannot run on ProactorEventLoop, which is what Python
+    uses by default on Windows. Left alone this surfaces thirty seconds later
+    as a PoolTimeout behind a wall of connection warnings, which says nothing
+    about the actual cause. Linux -- and therefore Render -- uses
+    SelectorEventLoop already, so this only ever fires in local development.
+    """
+    if sys.platform != "win32":
+        return
+
+    loop = asyncio.get_running_loop()
+    if isinstance(loop, asyncio.SelectorEventLoop):
+        return
+
+    raise RuntimeError(
+        "AGENT_CHECKPOINTER=postgres needs a SelectorEventLoop, but this process "
+        "is running Windows' default ProactorEventLoop, which psycopg cannot use "
+        "asynchronously. Either set AGENT_CHECKPOINTER=memory for local "
+        "development, or start the process with "
+        "asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy()) "
+        "before the server starts. Deployments run on Linux and are unaffected."
+    )
 
 
 async def setup_checkpointer() -> BaseCheckpointSaver:  # type: ignore[type-arg]
@@ -44,6 +96,8 @@ async def setup_checkpointer() -> BaseCheckpointSaver:  # type: ignore[type-arg]
     if settings.agent_checkpointer == "memory":
         _saver = InMemorySaver()
         return _saver
+
+    _require_compatible_event_loop()
 
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
     from psycopg_pool import AsyncConnectionPool

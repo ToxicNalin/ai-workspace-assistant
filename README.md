@@ -28,6 +28,12 @@ pip install -e ".[dev]"
 uvicorn app.main:app --reload
 ```
 
+On **Windows**, use `python scripts/dev.py` instead if you set
+`AGENT_CHECKPOINTER=postgres`. psycopg's async mode cannot run on the
+`ProactorEventLoop` that uvicorn hardcodes on Windows, and that is chosen by a
+loop factory rather than the event loop policy, so the loop has to be built
+explicitly. Linux — and therefore Render — is unaffected.
+
 `GET /health` should return `{"status": "ok"}`.
 
 Or with Docker Compose (also starts a local Postgres + pgvector, unused until
