@@ -1,0 +1,64 @@
+# Keeps the Render free instance awake, so a reviewer opening the link gets a
+# page rather than a 50-second cold start (SPEC-v2 section 7).
+#
+# BEFORE THIS DOES ANYTHING: set a repository variable named APP_URL to the
+# Render service URL -- Settings -> Secrets and variables -> Actions ->
+# Variables -> New repository variable. Without it every run exits early
+# rather than failing, so the workflow is harmless until you are ready.
+#
+# ONLY USE THIS ON A PUBLIC REPO. Actions minutes are unmetered for public
+# repositories. On a private one, a run every 10 minutes is ~4,300 runs a
+# month and each is billed at a one-minute minimum -- roughly double the free
+# allowance, spent entirely on pinging your own health endpoint. If this repo
+# is private, delete this file and use cron-job.org instead; it is free either
+# way and does not have the caveat below.
+#
+# GitHub also disables scheduled workflows on a repository with no pushes for
+# 60 days, and re-enabling is manual. cron-job.org has no such rule, so it is
+# the more reliable choice if the project is going quiet.
+
+name: Keep warm
+
+on:
+  schedule:
+    # Every 10 minutes. Render spins down at ~15 minutes idle, so this leaves
+    # room for GitHub's scheduler running late, which it often does.
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+# One ping at a time. If a run is somehow still going when the next fires,
+# skip rather than queue -- a backlog of health checks helps nobody.
+concurrency:
+  group: keep-warm
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - name: Ping /health
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+        run: |
+          if [ -z "$APP_URL" ]; then
+            echo "APP_URL is not set - nothing to ping yet. See this file's header."
+            exit 0
+          fi
+
+          # --retry covers the cold start itself: if the instance was asleep,
+          # the first request can take most of a minute and may time out
+          # before Render has finished waking it.
+          status=$(curl --silent --show-error --location \
+                        --retry 3 --retry-all-errors --retry-delay 15 \
+                        --max-time 90 \
+                        --output /dev/null --write-out '%{http_code}' \
+                        "$APP_URL/health")
+
+          echo "GET $APP_URL/health -> $status"
+
+          if [ "$status" != "200" ]; then
+            echo "::error::Health check returned $status, not 200."
+            exit 1
+          fi
