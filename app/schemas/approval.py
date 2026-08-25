@@ -4,13 +4,16 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from app.constants import PendingActionStatus, PendingActionType
+from app.constants import PendingActionOrigin, PendingActionStatus, PendingActionType
 from app.schemas.common import ORMModel
 
 
 class PendingActionOut(ORMModel):
     id: uuid.UUID
-    thread_id: uuid.UUID
+    # NULL for an action proposed directly through /email/send: there is no
+    # conversation behind it, and no paused agent run waiting on the decision.
+    thread_id: uuid.UUID | None
+    origin: PendingActionOrigin
     type: PendingActionType
     # The action exactly as it will be executed, recipients already resolved to
     # real members of this workspace.
@@ -28,6 +31,10 @@ class PendingActionOut(ORMModel):
 
 
 class ApprovalDecision(BaseModel):
+    # Three, not four. The middleware also understands "respond", but that is
+    # the server's own channel for handing back the result of an action it has
+    # already carried out (see app/ai/agent/graph.py) -- never something a
+    # client may ask for.
     decision: Literal["approve", "edit", "reject"]
     # Required on every decision, including a rejection: it proves the reviewer
     # was looking at the action the server actually holds.

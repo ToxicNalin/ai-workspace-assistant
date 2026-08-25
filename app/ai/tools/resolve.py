@@ -24,22 +24,19 @@ from dataclasses import dataclass
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.tools.base import ActionRefused
 from app.database.models.membership import WorkspaceMember
 from app.database.models.user import User
 
 
-class UnresolvableRecipient(Exception):
-    """A named person is not a member of this workspace.
-
-    Deliberately not a subclass of AppError: this never becomes an HTTP status.
-    It aborts the action inside the agent flow, which is recorded as a refusal.
-    """
+class UnresolvableRecipient(ActionRefused):
+    """A named person is not a member of this workspace."""
 
     def __init__(self, reference: str) -> None:
-        self.reference = reference
         super().__init__(
+            reference,
             f"'{reference}' is not a member of this workspace, so it cannot be used "
-            f"as a recipient. Only current workspace members can be contacted."
+            f"as a recipient. Only current workspace members can be contacted.",
         )
 
 

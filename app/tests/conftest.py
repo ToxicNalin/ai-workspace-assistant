@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 from app.config import get_settings
 from app.database.session import engine, get_db
 from app.main import app
+from app.services.email_service import ConsoleEmailProvider
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -62,3 +63,20 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
             yield ac
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def outbox(monkeypatch: pytest.MonkeyPatch) -> ConsoleEmailProvider:
+    """A fresh mail recorder for one test, injected where the route reads it.
+
+    Autouse: no test should reach the process-wide provider, whose outbox would
+    otherwise accumulate across the whole session. Tests that assert on what
+    was sent just name the fixture.
+
+    Patched at the call site rather than reconfiguring the provider globally:
+    get_email_provider() is lru_cached, so a settings-level switch would leak
+    the same instance -- and its accumulated outbox -- into every later test.
+    """
+    provider = ConsoleEmailProvider()
+    monkeypatch.setattr("app.api.approvals.get_email_provider", lambda: provider)
+    return provider

@@ -2,12 +2,15 @@
 
 Assignees are member references, not addresses or arbitrary user ids -- an
 assignment is a side effect that names a person, so it goes through the same
-resolver as recipients and guests (SPEC-v2 D21).
+resolver as recipients and guests (SPEC-v2 D21). The body is unreachable; see
+app/ai/tools/base.py.
 """
 
 from typing import Any
 
 from langchain_core.tools import BaseTool, tool
+
+from app.ai.tools.base import refuse_direct_execution
 
 
 def build_tasks_tool() -> BaseTool:
@@ -21,6 +24,6 @@ def build_tasks_tool() -> BaseTool:
                 workspace member. Not an address or an id -- the server
                 resolves the name and refuses anyone who is not a member here.
         """
-        return f"Created {len(tasks)} task(s)."
+        refuse_direct_execution("create_tasks")
 
     return create_tasks

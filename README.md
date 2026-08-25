@@ -153,9 +153,14 @@ confirm the resource exists.
 
 Built with `create_agent` and `HumanInTheLoopMiddleware`. The interrupt policy is
 a whitelist of the safe thing rather than a blacklist of the dangerous ones: the
-read-only `search_documents` is the only tool that runs unattended, so a tool
-added later without an explicit entry interrupts by default rather than executing
-silently.
+read-only `search_documents` is the only tool that runs unattended.
+
+The library does not fail safe here, which is worth being precise about.
+`HumanInTheLoopMiddleware` interrupts on the tools named in `interrupt_on` and
+lets every other tool call straight through — so a side-effecting tool added
+later and forgotten would run with no approval and no audit trail. The missing
+default is supplied by `assert_every_tool_has_a_policy`, which refuses to build
+an agent whose tools are not all accounted for.
 
 The graph is compiled per request so the search tool can close over the caller's
 workspace id. That costs a compile per turn and buys a property worth more than
@@ -165,5 +170,36 @@ in state where a tool argument or a crafted document could reach it.
 Paused approvals live in Postgres via `AsyncPostgresSaver`, in the same Neon
 database as everything else. An approval waiting on a human will routinely
 outlive the free tier's fifteen-minute idle spin-down, so it has to.
+
+## What happens after approval
+
+**No side-effecting tool body is ever executed in this application.** That reads
+like a bug and is the design.
+
+The obvious implementation is to resume the paused graph and let the tool run.
+Instead the side effect is carried out by
+[`app/services/action_executor.py`](app/services/action_executor.py), directly
+from `pending_actions.payload` — the exact object the human was shown and the one
+`payload_hash` covers — and the graph is afterwards resumed with the real outcome
+as the tool's result. Three things follow:
+
+- Nothing the model, the tool layer or the graph does between approval and
+  execution can change what executes. There is no second copy of the arguments
+  to drift from the first.
+- Success and failure are known where the decision is recorded, so `executed`
+  means executed. A provider outage moves the action to `failed` and rolls back
+  the half of the side effect that had already happened, rather than reporting a
+  send that never occurred.
+- The tool bodies are unreachable, and `refuse_direct_execution` makes that an
+  assertion rather than a claim: if one ever runs, the request fails loudly.
+
+Outbound mail goes through [Resend](https://resend.com) rather than the Gmail
+API — `gmail.send` is a *restricted* scope needing a CASA assessment by a
+Google-empanelled assessor, several weeks, recertified annually. `From:` is a
+no-reply sender; `Reply-To:` is the person who requested the action. Calendar
+invitations are RFC 5545 `.ics` attachments rather than Google Calendar OAuth,
+for the same class of reason. Both alternatives are kept as interfaces with
+documented stubs, so neither is a hole in the design — just a scope this project
+deliberately does not request.
 
 More to come as each build step lands — see `docs/BUILD-ORDER.md`.

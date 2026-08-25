@@ -18,10 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.tests.factories import (
     auth_headers,
+    make_calendar_event,
     make_chat_thread,
     make_document,
     make_member,
     make_pending_action,
+    make_task,
     make_user,
     make_workspace,
     random_email,
@@ -42,6 +44,8 @@ class Victim:
     document_id: uuid.UUID
     thread_id: uuid.UUID
     action_id: uuid.UUID
+    task_id: uuid.UUID
+    event_id: uuid.UUID
 
 
 # One case for every route that depends on get_workspace_context, directly or
@@ -92,6 +96,38 @@ TENANT_SCOPED_ROUTES: list[RouteCase] = [
         {"decision": "approve", "payload_hash": "0" * 64},
     ),
     ("GET", lambda v: f"/workspaces/{v.workspace_id}/audit-log", None),
+    # Step 7. Tasks and events name real people and carry real content, and
+    # the email routes are the one place a message leaves this application --
+    # so a workspace boundary that held everywhere else and not here would be
+    # the leak that matters most.
+    ("GET", lambda v: f"/workspaces/{v.workspace_id}/tasks", None),
+    ("POST", lambda v: f"/workspaces/{v.workspace_id}/tasks", {"title": "Injected"}),
+    ("GET", lambda v: f"/workspaces/{v.workspace_id}/tasks/{v.task_id}", None),
+    (
+        "PATCH",
+        lambda v: f"/workspaces/{v.workspace_id}/tasks/{v.task_id}",
+        {"status": "done"},
+    ),
+    ("DELETE", lambda v: f"/workspaces/{v.workspace_id}/tasks/{v.task_id}", None),
+    ("GET", lambda v: f"/workspaces/{v.workspace_id}/events", None),
+    (
+        "POST",
+        lambda v: f"/workspaces/{v.workspace_id}/events",
+        {
+            "title": "Injected",
+            "start_time": "2026-09-01T10:00:00+00:00",
+            "end_time": "2026-09-01T11:00:00+00:00",
+            "guests": [],
+        },
+    ),
+    ("GET", lambda v: f"/workspaces/{v.workspace_id}/events/{v.event_id}", None),
+    ("GET", lambda v: f"/workspaces/{v.workspace_id}/events/{v.event_id}/ics", None),
+    ("GET", lambda v: f"/workspaces/{v.workspace_id}/email/status", None),
+    (
+        "POST",
+        lambda v: f"/workspaces/{v.workspace_id}/email/send",
+        {"recipients": ["Someone"], "subject": "Injected", "body": "Body."},
+    ),
 ]
 
 
@@ -110,6 +146,10 @@ async def test_cross_tenant_access_is_404_never_403(
     action_a = await make_pending_action(
         db_session, workspace=workspace_a, thread=thread_a, user=admin_a
     )
+    task_a = await make_task(db_session, workspace=workspace_a, created_by=admin_a)
+    event_a = await make_calendar_event(
+        db_session, workspace=workspace_a, created_by=admin_a
+    )
 
     # A genuine outsider: a member elsewhere, with no relationship at all to
     # workspace_a -- not even a rejected invite.
@@ -122,6 +162,8 @@ async def test_cross_tenant_access_is_404_never_403(
         document_id=document_a.id,
         thread_id=thread_a.id,
         action_id=action_a.id,
+        task_id=task_a.id,
+        event_id=event_a.id,
     )
     path = build_path(victim)
     response = await client.request(method, path, json=body, headers=auth_headers(outsider))

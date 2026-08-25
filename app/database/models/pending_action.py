@@ -6,7 +6,7 @@ from sqlalchemy import DateTime, ForeignKey, Index, String, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.constants import PendingActionStatus, PendingActionType
+from app.constants import PendingActionOrigin, PendingActionStatus, PendingActionType
 from app.database.base import Base
 from app.database.mixins import UUIDPrimaryKey, WorkspaceScoped
 from app.database.types import str_enum
@@ -26,8 +26,17 @@ class PendingAction(Base, UUIDPrimaryKey, WorkspaceScoped):
         Index("ix_pending_actions_workspace_id_status", "workspace_id", "status"),
     )
 
-    thread_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("chat_threads.id", ondelete="CASCADE")
+    # Nullable since Step 7. An action proposed by the agent is attached to
+    # the conversation it came from, and a paused graph run is waiting on that
+    # thread id. An action proposed directly through /email/send has no graph
+    # behind it and no conversation to belong to.
+    thread_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("chat_threads.id", ondelete="CASCADE"), default=None
+    )
+    origin: Mapped[PendingActionOrigin] = mapped_column(
+        str_enum(PendingActionOrigin, name="pending_action_origin"),
+        default=PendingActionOrigin.AGENT,
+        server_default=PendingActionOrigin.AGENT.value,
     )
     type: Mapped[PendingActionType] = mapped_column(
         str_enum(PendingActionType, name="pending_action_type")

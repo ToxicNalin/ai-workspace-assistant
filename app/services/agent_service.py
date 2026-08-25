@@ -10,6 +10,7 @@ It is refused, recorded, and the agent is told so.
 import logging
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
@@ -20,8 +21,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.agent.graph import build_agent
 from app.ai.agent.state import ProposedAction, parse_interrupts
-from app.ai.tools.resolve import ResolvedMember, UnresolvableRecipient, resolve_members
-from app.constants import AuditAction, ChatRole, PendingActionStatus, PendingActionType
+from app.ai.tools.base import ActionRefused, InvalidActionArguments
+from app.ai.tools.resolve import ResolvedMember, resolve_members
+from app.constants import (
+    MAX_TASKS_PER_ACTION,
+    AuditAction,
+    ChatRole,
+    PendingActionStatus,
+    PendingActionType,
+)
 from app.database.models.chat import ChatMessage, ChatThread
 from app.database.models.pending_action import PendingAction
 from app.exceptions import NotFound
@@ -40,6 +48,21 @@ class AgentTurn:
     reply: str
     pending: list[PendingAction]
     refused: list[PendingAction]
+
+
+def _parse_moment(value: Any, field: str) -> datetime:
+    """Reject an unparseable timestamp at proposal time, not at execution time.
+
+    Discovering it after approval would mean a human had already authorised
+    something that was never going to work, and the refusal would arrive as a
+    failure rather than as the agent being told to try again.
+    """
+    try:
+        return datetime.fromisoformat(str(value))
+    except (TypeError, ValueError) as exc:
+        raise InvalidActionArguments(
+            field, f"'{value}' is not a valid ISO 8601 {field}."
+        ) from exc
 
 
 def _members_payload(members: list[ResolvedMember]) -> list[dict[str, str]]:
@@ -75,16 +98,35 @@ async def _resolve_action(
         guests = await resolve_members(
             db, workspace_id=workspace_id, references=list(args.get("guests") or [])
         )
+        start_time = _parse_moment(args.get("start_time"), "start time")
+        end_time = _parse_moment(args.get("end_time"), "end time")
+        if end_time <= start_time:
+            raise InvalidActionArguments(
+                "end time", "An event must end after it starts."
+            )
         return {
             "type": PendingActionType.CREATE_EVENT.value,
             "title": str(args.get("title") or ""),
-            "start_time": str(args.get("start_time") or ""),
-            "end_time": str(args.get("end_time") or ""),
+            # Stored normalised rather than as the model wrote them. What the
+            # human is shown, what the hash covers and what is eventually
+            # written to the calendar are then one string, not three
+            # renderings of the same instant.
+            "start_time": start_time.isoformat(),
+            "end_time": end_time.isoformat(),
             "guests": _members_payload(guests),
         }
 
+    raw_tasks = list(args.get("tasks") or [])
+    if not raw_tasks:
+        raise InvalidActionArguments("tasks", "There are no tasks to create.")
+    if len(raw_tasks) > MAX_TASKS_PER_ACTION:
+        raise InvalidActionArguments(
+            "tasks",
+            f"No more than {MAX_TASKS_PER_ACTION} tasks can be created in one action.",
+        )
+
     tasks: list[dict[str, Any]] = []
-    for raw in args.get("tasks") or []:
+    for raw in raw_tasks:
         assignee = raw.get("assignee")
         resolved = (
             await resolve_members(db, workspace_id=workspace_id, references=[assignee])
@@ -159,10 +201,12 @@ async def run_agent(
     for action in parse_interrupts(result):
         try:
             payload = await _resolve_action(db, workspace_id=workspace_id, action=action)
-        except UnresolvableRecipient as exc:
-            # The channel D21 exists to close. Recorded as a refused action so
-            # the attempt is visible, and the agent is told why -- but nothing
-            # is ever offered to a human for approval.
+        except ActionRefused as exc:
+            # For a named non-member this is the channel D21 exists to close.
+            # For unparseable arguments it is simply the server declining to
+            # show a human something it already knows is broken. Either way
+            # the attempt is recorded, the agent is told why, and nothing is
+            # ever offered for approval.
             record = PendingAction(
                 workspace_id=workspace_id,
                 thread_id=thread.id,

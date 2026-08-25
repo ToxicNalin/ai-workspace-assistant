@@ -15,6 +15,7 @@ from app.schemas.approval import (
     PendingActionOut,
 )
 from app.services import agent_service, approval_service, audit_service
+from app.services.email_service import get_email_provider
 
 router = APIRouter(prefix="/workspaces/{workspace_id}", tags=["approvals"])
 
@@ -74,6 +75,7 @@ async def decide(
         db,
         model=get_agent_model(),
         checkpointer=await get_checkpointer(),
+        mailer=get_email_provider(),
         workspace_id=context.workspace_id,
         user_id=context.user.id,
         action_id=action_id,

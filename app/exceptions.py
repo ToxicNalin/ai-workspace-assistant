@@ -48,3 +48,16 @@ class PayloadTooLarge(AppError):
 class RateLimited(AppError):
     status_code = 429
     detail = "Rate limited"
+
+
+class UpstreamFailure(AppError):
+    """A third-party service failed while we were carrying out an approved action.
+
+    Distinct from a 500: nothing in this application is broken. The email
+    provider was unreachable, or refused the message. The distinction matters
+    to whoever approved the action -- their decision stands, the side effect
+    did not happen, and retrying is a reasonable thing to do.
+    """
+
+    status_code = 502
+    detail = "An external service failed while carrying out this action"

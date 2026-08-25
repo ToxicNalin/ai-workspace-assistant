@@ -59,12 +59,35 @@ def _type_bound_check_constraint_names() -> set[str]:
 TYPE_BOUND_CHECK_CONSTRAINTS = _type_bound_check_constraint_names()
 
 
+# LangGraph owns these, and AsyncPostgresSaver.setup() creates them at boot
+# (SPEC-v2 table 17). They are therefore in the database and deliberately not
+# in Base.metadata -- which is exactly the shape autogenerate reads as "these
+# tables were deleted, drop them". Left unfiltered, the first migration
+# generated after the agent has ever run carries four DROP TABLEs that destroy
+# every paused approval in the system, and does it inside the boot migration
+# on Render where nobody is watching.
+#
+# Hardcoded rather than derived, because there is no metadata to derive them
+# from -- that absence is the entire problem. Verified against
+# langgraph-checkpoint-postgres 3.1.2.
+LANGGRAPH_OWNED_TABLES = frozenset(
+    {"checkpoints", "checkpoint_blobs", "checkpoint_writes", "checkpoint_migrations"}
+)
+
+
 def include_name(
     name: str | None,
     type_: NameFilterType,
     parent_names: NameFilterParentNames,
 ) -> bool:
-    """Keep autogenerate away from the CHECK constraints the Enum type creates.
+    """Two filters, for two different ways autogenerate lies about this schema.
+
+    The first: tables another library owns and creates for itself. See
+    LANGGRAPH_OWNED_TABLES above -- excluding them here is what stops a
+    migration proposing to drop them, and it covers their indexes too, since
+    those are filtered by the table they belong to.
+
+    The second: the CHECK constraints the Enum type creates.
 
     `str_enum()` uses native_enum=False + create_constraint=True, so SQLAlchemy
     attaches the CHECK constraint itself and marks it `_type_bound`. Alembic's
@@ -80,8 +103,14 @@ def include_name(
     drift detector.
 
     Note this is include_name, not include_object: the model-side constraints
-    are gone before any object filter would see them.
+    are gone before any object filter would see them, and a table that is not
+    in the metadata at all never becomes an object either.
     """
+    if type_ == "table" and name in LANGGRAPH_OWNED_TABLES:
+        return False
+    if parent_names.get("table_name") in LANGGRAPH_OWNED_TABLES:
+        return False
+
     return not (type_ == "check_constraint" and name in TYPE_BOUND_CHECK_CONSTRAINTS)
 
 

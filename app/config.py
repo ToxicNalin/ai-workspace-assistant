@@ -55,6 +55,24 @@ class Settings(BaseSettings):
     # swapping to OpenAI is this one string (SPEC-v2 D18).
     llm_model: str = "google_genai:gemini-2.5-flash"
 
+    # console | resend -- console records the message and logs it instead of
+    # sending, so a fresh clone can drive an approved action end to end with
+    # no API key, no network and nothing arriving in a stranger's inbox.
+    # Production sets resend (SPEC-v2 D16: gmail.send is a restricted scope).
+    email_provider: Literal["console", "resend"] = "console"
+    resend_api_key: str = ""
+    # Resend will only send from a verified domain, with the exception of its
+    # own onboarding sender -- which is what makes a £0 demo possible.
+    email_from_address: str = "onboarding@resend.dev"
+    email_from_name: str = "AI Workspace Assistant"
+
+    # ics | google -- ics builds an RFC 5545 invitation and attaches it to the
+    # notification email, which works for every recipient with no OAuth at
+    # all. google is declared behind the same interface and deliberately not
+    # shipped: calendar.events is a sensitive scope with multi-week
+    # verification (SPEC-v2 D17, and the non-goals in §9).
+    calendar_provider: Literal["ics", "google"] = "ics"
+
     # memory | postgres -- where LangGraph keeps the agent's paused state.
     # Production uses postgres so an approval left overnight survives the free
     # tier spinning down. Tests use memory: the checkpointer commits on its own

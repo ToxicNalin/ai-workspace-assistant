@@ -1,12 +1,16 @@
 """The `send_email` tool declaration.
 
-Nothing here sends anything -- Step 7 wires a real provider. What matters at
-this step is the *signature*: `recipients` are member references, never
-addresses. See app/ai/tools/resolve.py for why that distinction is the whole
-security model rather than a naming preference.
+Nothing here sends anything, and after Step 7 that is truer than it was
+before: this body is never executed at all. What the declaration is *for* is
+the signature -- `recipients` are member references, never addresses. See
+app/ai/tools/resolve.py for why that distinction is the whole security model
+rather than a naming preference, and app/ai/tools/base.py for why the body
+raises instead of doing the work.
 """
 
 from langchain_core.tools import BaseTool, tool
+
+from app.ai.tools.base import refuse_direct_execution
 
 
 def build_email_tool() -> BaseTool:
@@ -22,8 +26,6 @@ def build_email_tool() -> BaseTool:
             subject: The subject line.
             body: The message body.
         """
-        # Reached only after a human approved it. By then the arguments have
-        # been replaced with the server-resolved payload that human was shown.
-        return f"Email sent to {', '.join(recipients)}."
+        refuse_direct_execution("send_email")
 
     return send_email

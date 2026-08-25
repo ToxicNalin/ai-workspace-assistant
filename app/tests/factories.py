@@ -1,6 +1,7 @@
 import hashlib
 import uuid
 from collections.abc import Sequence
+from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,12 +11,15 @@ from app.constants import (
     DocumentStatus,
     PendingActionStatus,
     PendingActionType,
+    TaskStatus,
     WorkspaceRole,
 )
+from app.database.models.calendar_event import CalendarEvent
 from app.database.models.chat import ChatThread
 from app.database.models.document import Document
 from app.database.models.membership import WorkspaceMember
 from app.database.models.pending_action import PendingAction
+from app.database.models.task import Task
 from app.database.models.user import User
 from app.database.models.workspace import Workspace
 from app.services.payload import hash_payload
@@ -250,3 +254,53 @@ async def make_pending_action(
     await db.commit()
     await db.refresh(action)
     return action
+
+
+async def make_task(
+    db: AsyncSession,
+    *,
+    workspace: Workspace,
+    created_by: User,
+    title: str = "Write the handover note",
+    assigned_to: User | None = None,
+    status: TaskStatus = TaskStatus.TODO,
+) -> Task:
+    task = Task(
+        workspace_id=workspace.id,
+        title=title,
+        description="",
+        assigned_to=assigned_to.id if assigned_to is not None else None,
+        status=status,
+        created_by=created_by.id,
+    )
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
+    return task
+
+
+async def make_calendar_event(
+    db: AsyncSession,
+    *,
+    workspace: Workspace,
+    created_by: User,
+    title: str = "Quarterly review",
+    guests: Sequence[User] = (),
+) -> CalendarEvent:
+    event = CalendarEvent(
+        workspace_id=workspace.id,
+        title=title,
+        description="",
+        start_time=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
+        end_time=datetime(2026, 9, 1, 11, 0, tzinfo=UTC),
+        created_by=created_by.id,
+        ics_uid=f"{uuid.uuid4()}@ai-workspace-assistant",
+        guests=[
+            {"user_id": str(guest.id), "name": guest.name, "email": guest.email}
+            for guest in guests
+        ],
+    )
+    db.add(event)
+    await db.commit()
+    await db.refresh(event)
+    return event
