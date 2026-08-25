@@ -1,15 +1,40 @@
-import shutil
-from collections.abc import AsyncGenerator, Iterator
+import os
 
-import pytest
-import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
+# Set before anything imports app.config, and deliberately not `setdefault`:
+# environment variables outrank the .env file in pydantic-settings, so this
+# overrides whatever a developer has configured locally.
+#
+# Without it the suite's behaviour depends on the .env of whoever is running
+# it. The moment a real GOOGLE_API_KEY lands in that file, `pytest` starts
+# embedding every fixture against the live API -- slow, quota-burning, and
+# flaky -- and a real RESEND_API_KEY would mean tests posting genuine email.
+# Tests run against the offline providers, always, whatever the machine says.
+_OFFLINE_PROVIDERS = {
+    "EMBEDDING_PROVIDER": "fake",
+    "LLM_PROVIDER": "fake",
+    "EMAIL_PROVIDER": "console",
+    "EMAIL_FROM_ADDRESS": "onboarding@resend.dev",
+    "EMAIL_FROM_NAME": "AI Workspace Assistant",
+    "STORAGE_BACKEND": "local",
+    "CALENDAR_PROVIDER": "ics",
+    # The checkpointer commits on its own connections, outside the per-test
+    # rollback, so a Postgres one would accumulate rows run after run.
+    "AGENT_CHECKPOINTER": "memory",
+}
+os.environ.update(_OFFLINE_PROVIDERS)
 
-from app.config import get_settings
-from app.database.session import engine, get_db
-from app.main import app
-from app.services.email_service import ConsoleEmailProvider
+import shutil  # noqa: E402
+from collections.abc import AsyncGenerator, Iterator  # noqa: E402
+
+import pytest  # noqa: E402
+import pytest_asyncio  # noqa: E402
+from httpx import ASGITransport, AsyncClient  # noqa: E402
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession  # noqa: E402
+
+from app.config import get_settings  # noqa: E402
+from app.database.session import engine, get_db  # noqa: E402
+from app.main import app  # noqa: E402
+from app.services.email_service import ConsoleEmailProvider  # noqa: E402
 
 
 @pytest.fixture(autouse=True, scope="session")

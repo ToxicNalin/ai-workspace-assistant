@@ -26,15 +26,26 @@ class Settings(BaseSettings):
     # Fernet() rejects anything that isn't 32 url-safe base64 bytes.
     fernet_key: str = "10IAZaiwQMOJNknjWUejIEMlNgV2tEj9Chj22uyWOoE="
 
-    # local | r2 -- local is filesystem-backed, for tests and local dev; r2 is
-    # the production Cloudflare R2 implementation, both behind ObjectStore.
-    storage_backend: Literal["local", "r2"] = "local"
+    # local | s3 -- local is filesystem-backed, for tests and local dev. s3 is
+    # any S3-compatible object store, both behind the same ObjectStore
+    # protocol.
+    #
+    # SPEC-v2 D12 chose Cloudflare R2 for its permanently free 10 GB and zero
+    # egress. R2 asks for a card on signup, which a student project should not
+    # have to give, so the shipped deployment points the same S3 client at
+    # Supabase Storage instead. Nothing in the code knows the difference --
+    # that is what the endpoint and region being configuration rather than
+    # constants buys, and swapping back to R2 is four values in a dashboard.
+    storage_backend: Literal["local", "s3"] = "local"
     local_storage_dir: str = ".data/uploads"
 
-    r2_bucket: str = "ai-workspace-assistant-dev"
-    r2_endpoint_url: str = ""
-    r2_access_key_id: str = ""
-    r2_secret_access_key: str = ""
+    s3_bucket: str = "ai-workspace-assistant-dev"
+    s3_endpoint_url: str = ""
+    s3_access_key_id: str = ""
+    s3_secret_access_key: str = ""
+    # R2 ignores the region and wants the literal "auto"; Supabase and AWS
+    # want the project's real one, and signing fails if it is wrong.
+    s3_region: str = "auto"
 
     # fake | gemini -- fake is a deterministic offline embedder needing no API
     # key and no network, so a fresh clone and CI both ingest documents end to
@@ -53,7 +64,12 @@ class Settings(BaseSettings):
     llm_provider: Literal["fake", "gemini"] = "fake"
     # Passed to langchain's init_chat_model, which is provider-agnostic --
     # swapping to OpenAI is this one string (SPEC-v2 D18).
-    llm_model: str = "google_genai:gemini-2.5-flash"
+    #
+    # Not the gemini-2.5-flash the spec pinned: Google now returns 404 for it
+    # on newly issued keys ("no longer available to new users"), so a fresh
+    # clone following the spec would fail on its first real chat call. 3.6 is
+    # what that deprecation notice points at, and it is verified working.
+    llm_model: str = "google_genai:gemini-3.6-flash"
 
     # console | resend -- console records the message and logs it instead of
     # sending, so a fresh clone can drive an approved action end to end with

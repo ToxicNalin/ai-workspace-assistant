@@ -30,6 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.agent.graph import build_agent
+from app.ai.agent.state import reply_text
 from app.ai.tools.base import ActionRefused
 from app.ai.tools.resolve import UnresolvableRecipient, resolve_members
 from app.constants import (
@@ -201,7 +202,7 @@ async def _resume_graph(
     agent = build_agent(db, workspace_id, model=model, checkpointer=checkpointer)
     config: Any = {"configurable": {"thread_id": str(action.thread_id)}}
     result = await agent.ainvoke(Command(resume={"decisions": [resume]}), config=config)
-    return _reply_text(result)
+    return reply_text(result)
 
 
 async def decide(
@@ -443,13 +444,6 @@ async def _persist_reply(
             content=reply,
         )
     )
-
-
-def _reply_text(result: dict[str, Any]) -> str:
-    for message in reversed(result.get("messages") or []):
-        if getattr(message, "type", None) == "ai" and message.content:
-            return str(message.content)
-    return ""
 
 
 __all__ = [

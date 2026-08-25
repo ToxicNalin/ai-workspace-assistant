@@ -51,3 +51,37 @@ def parse_interrupts(result: dict[str, Any]) -> list[ProposedAction]:
             )
 
     return proposed
+
+
+def reply_text(result: dict[str, Any]) -> str:
+    """The assistant's last message, as text a person can read.
+
+    `message.content` is not reliably a string. Gemini 3.x returns a list of
+    content blocks, so `str(content)` yields a Python repr --
+    `[{'type': 'text', 'text': 'Sent.', 'extras': {...}}]` -- which would then
+    be persisted as a chat message and shown to the user verbatim.
+
+    `.text` collapses blocks to their text for every provider that emits them,
+    so it is the right accessor. It currently returns a `TextAccessor` -- a str
+    subclass that is *also* callable, for back-compat with the older
+    `.text()` method -- so the string check has to come first: calling it
+    still works but is deprecated, and `str()` narrows it back to a plain
+    string before it is persisted.
+
+    The fallback covers a message object with neither. All of it lives here
+    rather than duplicated across two services because getting it wrong is
+    invisible until you point the app at a real provider.
+    """
+    for message in reversed(result.get("messages") or []):
+        if getattr(message, "type", None) != "ai" or not message.content:
+            continue
+
+        text = getattr(message, "text", None)
+        if isinstance(text, str):
+            return str(text)
+        if callable(text):
+            return str(text())
+
+        return str(message.content)
+
+    return ""

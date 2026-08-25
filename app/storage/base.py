@@ -16,10 +16,10 @@ class ObjectStore(Protocol):
 def get_object_store() -> ObjectStore:
     settings = get_settings()
 
-    if settings.storage_backend == "r2":
-        from app.storage.r2 import R2ObjectStore
+    if settings.storage_backend == "s3":
+        from app.storage.s3 import S3ObjectStore
 
-        return R2ObjectStore()
+        return S3ObjectStore()
 
     from app.storage.local import LocalObjectStore
 

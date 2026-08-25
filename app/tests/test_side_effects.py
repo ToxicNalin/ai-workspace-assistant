@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.agent.fake_model import KeywordAgentModel, ScriptedAgentModel
 from app.ai.agent.graph import INTERRUPT_POLICY, build_agent
+from app.ai.agent.state import reply_text
 from app.ai.tools.base import ApprovalGateBypassed, assert_every_tool_has_a_policy
 from app.ai.tools.email import build_email_tool
 from app.constants import AuditAction, PendingActionStatus
@@ -443,3 +444,42 @@ def test_every_shipped_tool_is_accounted_for() -> None:
         "create_tasks",
         "search_documents",
     }
+
+
+# --------------------------------------------------------------------------
+# Reading the model's answer back.
+# --------------------------------------------------------------------------
+
+
+def test_a_reply_survives_a_provider_that_returns_content_blocks() -> None:
+    """`message.content` is not reliably a string.
+
+    Gemini 3.x returns a list of content blocks, so the obvious
+    `str(message.content)` yields a Python repr -- which would be persisted as
+    a chat message and shown to the user verbatim. The fake providers never
+    produce blocks, so nothing in the suite would have caught this; it only
+    appears once the app is pointed at a real model.
+    """
+    blocks = AIMessage(
+        content=[{"type": "text", "text": "The email was sent to Alice Smith."}]
+    )
+
+    assert reply_text({"messages": [blocks]}) == "The email was sent to Alice Smith."
+
+
+def test_a_plain_string_reply_still_works() -> None:
+    assert reply_text({"messages": [AIMessage(content="Sent.")]}) == "Sent."
+
+
+def test_the_last_assistant_message_wins() -> None:
+    """Tool messages and earlier turns sit in between; the reply is the most
+    recent thing the assistant actually said."""
+    result = {
+        "messages": [
+            AIMessage(content="Proposing that for approval."),
+            AIMessage(content=""),
+            AIMessage(content="Done."),
+        ]
+    }
+
+    assert reply_text(result) == "Done."

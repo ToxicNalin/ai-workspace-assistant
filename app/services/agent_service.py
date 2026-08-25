@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.agent.graph import build_agent
-from app.ai.agent.state import ProposedAction, parse_interrupts
+from app.ai.agent.state import ProposedAction, parse_interrupts, reply_text
 from app.ai.tools.base import ActionRefused, InvalidActionArguments
 from app.ai.tools.resolve import ResolvedMember, resolve_members
 from app.constants import (
@@ -144,13 +144,6 @@ async def _resolve_action(
     return {"type": PendingActionType.CREATE_TASKS.value, "tasks": tasks}
 
 
-def _reply_text(result: dict[str, Any]) -> str:
-    for message in reversed(result.get("messages") or []):
-        if getattr(message, "type", None) == "ai" and message.content:
-            return str(message.content)
-    return ""
-
-
 async def run_agent(
     db: AsyncSession,
     *,
@@ -259,7 +252,7 @@ async def run_agent(
         # human decides. Refusals above resolve themselves immediately.
         decisions.append({})
 
-    reply = _reply_text(result)
+    reply = reply_text(result)
 
     if refused and not pending:
         # Every proposal was refused, so nothing is waiting on a human and the
