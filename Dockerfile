@@ -7,7 +7,11 @@ WORKDIR /build
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-COPY pyproject.toml ./
+# README.md is not documentation here: pyproject.toml declares
+# `readme = "README.md"`, and hatchling validates that the file exists while
+# generating package metadata. Without it `pip install .` fails before it
+# resolves a single dependency.
+COPY pyproject.toml README.md ./
 COPY app ./app
 
 RUN pip install --no-cache-dir --upgrade pip && \

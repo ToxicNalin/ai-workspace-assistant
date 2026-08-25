@@ -1,0 +1,50 @@
+# Everything here is excluded from the build context -- the set of files sent
+# to the Docker daemon before the first instruction runs.
+#
+# Two reasons it is worth having. It makes builds faster, particularly on
+# Render's free tier. And it keeps secrets out of the context entirely, so a
+# future `COPY . .` cannot bake a .env into a published image; excluding them
+# here is a safeguard that does not depend on remembering.
+#
+# Note what is NOT excluded: README.md. pyproject.toml declares it as the
+# project readme and hatchling refuses to build metadata without it.
+
+# Version control and CI
+.git
+.gitignore
+.github
+
+# Secrets. .env.example is documentation and harmless, but nothing else here is.
+.env
+.env.*
+!.env.example
+
+# Local virtualenvs
+.venv
+venv
+ENV
+
+# Python build and cache artefacts
+__pycache__
+*.py[cod]
+*$py.class
+*.egg-info
+dist
+build
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Local object storage, used when STORAGE_BACKEND=local
+.data
+
+# Frontend (Step 9) -- built and deployed separately to Cloudflare Pages
+node_modules
+frontend/dist
+
+# Editors and OS
+.vscode
+.idea
+.claude
+.DS_Store
+Thumbs.db
