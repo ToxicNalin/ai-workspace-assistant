@@ -16,6 +16,7 @@ change.
 """
 
 import asyncio
+import re
 import sys
 import uuid
 from typing import Any
@@ -58,6 +59,9 @@ def _describe() -> list[str]:
     host = urlsplit(endpoint).hostname or ""
     if "supabase" in host:
         print("provider     : Supabase Storage")
+        problems += _supabase_key_shape_problems(
+            settings.s3_access_key_id, settings.s3_secret_access_key
+        )
         if settings.s3_region == "auto":
             problems.append(
                 "S3_REGION is 'auto', which is Cloudflare R2's convention. Supabase "
@@ -66,6 +70,53 @@ def _describe() -> list[str]:
             )
     elif "r2.cloudflarestorage" in host:
         print("provider     : Cloudflare R2")
+
+    return problems
+
+
+_HEX = re.compile(r"\A[0-9a-f]+\Z", re.IGNORECASE)
+
+# Supabase issues a 16-byte id and a 32-byte secret, both hex. Other providers
+# differ -- an AWS id is 20 characters beginning AKIA -- so this is only
+# applied when the endpoint says Supabase.
+SUPABASE_ID_CHARS = 32
+SUPABASE_SECRET_CHARS = 64
+
+
+def _supabase_key_shape_problems(key_id: str, secret: str) -> list[str]:
+    """Catch a truncated or stale paste before spending a network round trip.
+
+    Worth its own check because the dashboard's input box is narrower than the
+    secret it contains, so the value is visually cut off. A partial copy then
+    fails as SignatureDoesNotMatch, which reads like a configuration fault and
+    sends you looking at regions and endpoints instead of at the clipboard.
+    """
+    problems: list[str] = []
+
+    for label, value, expected in (
+        ("S3_ACCESS_KEY_ID", key_id, SUPABASE_ID_CHARS),
+        ("S3_SECRET_ACCESS_KEY", secret, SUPABASE_SECRET_CHARS),
+    ):
+        if not value:
+            continue
+
+        if len(value) < expected:
+            problems.append(
+                f"{label} is {len(value)} characters; Supabase issues {expected}. "
+                f"It looks truncated. The dashboard's input box is narrower than the "
+                f"value it holds, so click into it and select all rather than copying "
+                f"what you can see."
+            )
+        elif len(value) > expected:
+            problems.append(
+                f"{label} is {len(value)} characters; Supabase issues {expected}. "
+                f"Something extra came along with it -- a space or a newline."
+            )
+        elif not _HEX.match(value):
+            problems.append(
+                f"{label} contains a non-hex character. Supabase keys are hex only, "
+                f"so this is not the value from that field."
+            )
 
     return problems
 
