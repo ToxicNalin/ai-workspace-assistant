@@ -59,7 +59,7 @@ ai-workspace-assistant/
 | v1 | v2 | Reason |
 | --- | --- | --- |
 | `app/database/models.py` (one file) | `app/database/models/` (one file per aggregate) | Seventeen models in one module becomes unnavigable by week two and produces constant merge conflicts. |
-| `app/storage/upload.py`, `delete.py`, `replace.py` | `app/storage/base.py` + `r2.py` + `local.py` | Three verbs are not three modules. One interface with two implementations lets tests run without network. |
+| `app/storage/upload.py`, `delete.py`, `replace.py` | `app/storage/base.py` + `s3.py` + `local.py` | Three verbs are not three modules. One interface with two implementations lets tests run without network. |
 | — | `app/workers/` | New. Holds the Postgres job queue that replaced Celery. |
 | — | `app/middleware/` | v1 put CORS and rate limiting in `main.py`. They grow; give them a home. |
 | — | `app/ai/provider.py` | The single place a model provider is chosen, so swapping Gemini for OpenAI is one file. |
@@ -169,12 +169,12 @@ dashboard.
 
 ## Step 3 — Storage and document upload
 
-**Goal:** a file lands in R2 and a `documents` row exists with status `pending`. No processing yet.
+**Goal:** a file lands in object storage and a `documents` row exists with status `pending`. No processing yet.
 
 | File | Responsibility |
 | --- | --- |
 | `app/storage/base.py` | `ObjectStore` protocol: `put`, `get`, `delete`, `signed_url`. |
-| `app/storage/r2.py` | Cloudflare R2 implementation over the S3 API (`aioboto3`). |
+| `app/storage/s3.py` | S3-compatible implementation over `aioboto3`. Supabase Storage in production, R2 or AWS by changing two settings — see SPEC-v2 D24. |
 | `app/storage/local.py` | Filesystem implementation for tests and local development. |
 | `app/utils/validators.py` | **Magic-byte** content sniffing, size cap, extension/MIME agreement check. Extension checking alone is not validation. |
 | `app/database/models/document.py` | `documents` |
@@ -185,7 +185,7 @@ dashboard.
 
 **Migration:** `0003_documents.py`
 
-**Done when:** an uploaded PDF appears in R2 and in the documents list with status `pending`.
+**Done when:** an uploaded PDF appears in the bucket and in the documents list with status `pending`. `python -m scripts.check_storage` proves the credentials first.
 
 ---
 
@@ -199,7 +199,7 @@ dashboard.
 | `app/database/models/chunk.py` | `document_chunks`, including `embedding halfvec(768)` and `tsv tsvector`. |
 | `app/workers/queue.py` | `enqueue`, and `claim_next` using `FOR UPDATE SKIP LOCKED` with a `lease_until` heartbeat. Also `release`, `fail`, `reclaim_expired`. |
 | `app/workers/runner.py` | The asyncio loop started in the lifespan. Polls, claims, dispatches, heartbeats, backs off. |
-| `app/workers/jobs/ingest_document.py` | The job body: fetch from R2 → extract text → chunk → embed → insert chunks → mark `ready`. **Must be idempotent** — delete existing chunks for the document before inserting. |
+| `app/workers/jobs/ingest_document.py` | The job body: fetch from object storage → extract text → chunk → embed → insert chunks → mark `ready`. **Must be idempotent** — delete existing chunks for the document before inserting. |
 | `app/ai/chunking/splitter.py` | Text extraction per MIME type and splitting into chunks with page numbers preserved. |
 | `app/ai/provider.py` | `get_chat_model()` and `get_embedder()` from `Settings`. The only file that names a provider. |
 | `app/ai/embeddings/embedder.py` | Batched embedding calls, `gemini-embedding-2` at `output_dimensionality=768`, retry with backoff on 429. |

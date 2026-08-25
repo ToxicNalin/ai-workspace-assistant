@@ -74,8 +74,9 @@ feature list.
 | D11 | Celery + Redis + optional RabbitMQ | **Postgres-backed job queue** using `SELECT ... FOR UPDATE SKIP LOCKED`, drained by an asyncio task in the API process | No free tier gives you a persistent background worker. Render workers start at $1/mo and need a paid Redis. A Postgres queue is ~80 lines, needs zero new infrastructure, and gives durable retry for free. It is also a better interview answer than "I added Celery." |
 | D12 | MinIO / S3 | **Cloudflare R2** (10 GB free, zero egress) | MinIO needs a server to run on. R2's free tier is permanent and egress is free at any volume, which matters because documents get downloaded. |
 | D13 | Prometheus + Grafana dashboards | Structured JSON logs + Sentry free tier; Prometheus listed as an explicit non-goal | Grafana Cloud on a project with no traffic is decoration. Sentry actually catches the errors a reviewer might trigger. |
-| D14 | Fly.io / Railway / Render / VPS / Kubernetes | **Render free web service + Neon free Postgres + Cloudflare Pages + Cloudflare R2** | Fly.io removed its free allowance; new accounts pay from the first machine. Railway has no free tier, only a one-time $5 trial credit. Render's free web instance (512 MB, 0.1 CPU) is the only permanent free container of the three. |
+| D14 | Fly.io / Railway / Render / VPS / Kubernetes | **Render free web service + Neon free Postgres + Cloudflare Pages + object storage** (see D24) | Fly.io removed its free allowance; new accounts pay from the first machine. Railway has no free tier, only a one-time $5 trial credit. Render's free web instance (512 MB, 0.1 CPU) is the only permanent free container of the three. |
 | D15 | Redis for rate limiting | Postgres-backed counters at MVP; Render Key Value (25 MB free) only if genuinely needed | One less service. At portfolio traffic a Postgres counter is not the bottleneck. |
+| D24 | **Cloudflare R2** (D12) | **Supabase Storage**, reached through the same S3 client | R2 asks for a payment method at signup even on the free tier, which a student project should not have to give. D12's reasoning about needing managed object storage still holds — only the provider changed, and the code did not: `app/storage/s3.py` takes its endpoint and region from settings, so R2, Supabase and AWS are the same implementation. The costs are honest ones: 1 GB rather than 10 GB (still well clear of Neon's 0.5 GB, which is the binding limit), egress that is metered rather than free, and a free project that pauses after prolonged inactivity. Moving back is four values in a dashboard. |
 
 ### 2.3 Integrations
 
@@ -105,7 +106,7 @@ flowchart TD
         FE["React SPA<br/>Cloudflare Pages"]
         API["FastAPI + in-process job drainer<br/>Render free web service"]
         DB[("Neon Postgres 18<br/>+ pgvector 0.8")]
-        R2[("Cloudflare R2<br/>documents")]
+        R2[("Supabase Storage<br/>documents")]
     end
     LLM["Gemini / OpenAI<br/>via init_chat_model"]
     MAIL["Resend<br/>transactional email"]
@@ -330,7 +331,7 @@ one-file swap."* That sentence is worth more than actually having installed Cele
 | Frontend | Cloudflare Pages | unlimited sites, generous bandwidth | Vercel is equivalent |
 | API | Render free web service | 512 MB RAM, 0.1 CPU, $0 | **spins down after ~15 min idle** |
 | Database | Neon | 0.5 GB storage, 100 CU-hours/month | pgvector included on free; scale-to-zero after 5 min |
-| Documents | Cloudflare R2 | 10 GB, 1M Class A + 10M Class B ops, **zero egress** | egress stays free at any volume |
+| Documents | Supabase Storage | 1 GB, S3-compatible | **D24** — no card at signup, unlike R2. Same client either way |
 | Email | Resend or Brevo | free tier sufficient for a demo | replaces Gmail (D16) |
 | LLM | Gemini | free tier | swap via one env var |
 | Errors | Sentry | free tier | replaces Prometheus/Grafana |
@@ -401,7 +402,7 @@ receive 404, not 403, for anything in workspace B. This test file is the single 
 persuasive thing in the repo.
 
 **Phase 2 — documents and RAG.**
-Upload to R2, `ingestion_jobs` queue, chunk, embed, HNSW index, hybrid retrieval,
+Upload to object storage, `ingestion_jobs` queue, chunk, embed, HNSW index, hybrid retrieval,
 `/chat/query` with citations. No agent yet.
 
 **Phase 3 — the agent and the approval gate.**

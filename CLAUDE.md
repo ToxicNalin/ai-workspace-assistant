@@ -46,7 +46,7 @@ app/
   schemas/      Pydantic request/response models
   auth/         JWT, password hashing, RBAC dependencies, OAuth
   ai/           rag/ agent/ tools/ prompts/ retriever/ embeddings/
-  storage/      R2 upload/delete
+  storage/      object storage — one S3 client, Supabase or R2 by config
   workers/      Postgres-backed ingestion queue
   utils/
   tests/
@@ -64,7 +64,7 @@ can kill the process mid-job at any time.
 ## Deployment constraints
 
 Everything runs on free tiers: Render (512 MB, spins down at ~15 min idle), Neon
-(0.5 GB, scale-to-zero at 5 min), Cloudflare Pages, Cloudflare R2.
+(0.5 GB, scale-to-zero at 5 min), Cloudflare Pages, Supabase Storage (SPEC-v2 D24).
 
 - SQLAlchemy pool stays small: `pool_size=2, max_overflow=3, pool_pre_ping=True`.
 - Use Neon's **pooled** connection string.

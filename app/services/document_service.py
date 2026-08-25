@@ -9,7 +9,7 @@ from app.constants import MAX_DOCUMENTS_PER_WORKSPACE, MAX_UPLOAD_SIZE_BYTES, Do
 from app.database.models.document import Document
 from app.exceptions import Conflict, NotFound
 from app.storage.base import ObjectStore
-from app.utils.validators import validate_upload
+from app.utils.validators import safe_key_component, validate_upload
 from app.workers import queue
 
 
@@ -69,7 +69,9 @@ async def upload_document(
     if (document_count or 0) >= MAX_DOCUMENTS_PER_WORKSPACE:
         raise Conflict("This workspace has reached its document limit")
 
-    storage_key = f"{workspace_id}/{uuid.uuid4()}-{filename}"
+    # The row keeps the filename the user gave; the key gets a sanitised
+    # version of it. They are different jobs -- see safe_key_component.
+    storage_key = f"{workspace_id}/{uuid.uuid4()}-{safe_key_component(filename)}"
     # Store the object before the row exists: if the DB insert then fails,
     # the worst case is an orphaned object in the bucket. The other order
     # risks a row pointing at an object that was never actually written.
