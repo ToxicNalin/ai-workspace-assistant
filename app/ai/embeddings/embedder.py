@@ -25,6 +25,17 @@ class Embedder(Protocol):
 
     async def embed_documents(self, texts: Sequence[str]) -> list[list[float]]: ...
 
+    async def embed_query(self, text: str) -> list[float]:
+        """Embed a search query.
+
+        Separate from embed_documents because this model family embeds corpus
+        text and queries asymmetrically: the same string produces a different
+        vector depending on which side of the search it is on. Using the
+        document task type for a query costs recall silently, with no error to
+        notice.
+        """
+        ...
+
 
 def _batched(texts: Sequence[str], size: int) -> list[Sequence[str]]:
     return [texts[start : start + size] for start in range(0, len(texts), size)]
@@ -45,6 +56,12 @@ class FakeEmbedder:
 
     async def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
         return [self._vector(text) for text in texts]
+
+    async def embed_query(self, text: str) -> list[float]:
+        # Symmetric on purpose: a query whose text exactly matches a chunk
+        # lands on that chunk's vector, which makes vector retrieval
+        # assertable in tests without a real model.
+        return self._vector(text)
 
     @staticmethod
     def _vector(text: str) -> list[float]:
@@ -73,9 +90,10 @@ class GeminiEmbedder:
             # populate_by_name means both work, the alias is what is typed.
             api_key=SecretStr(api_key),
             output_dimensionality=dimensions,
-            # Corpus text and search queries are embedded asymmetrically by
-            # this model family; the query side arrives with the retriever in
-            # Step 5. Getting this wrong costs recall silently.
+            # The corpus side. Queries go through embed_query below, which
+            # applies RETRIEVAL_QUERY instead -- this model family embeds the
+            # two asymmetrically, and using one task type for both costs
+            # recall silently.
             task_type="RETRIEVAL_DOCUMENT",
         )
 
@@ -88,6 +106,20 @@ class GeminiEmbedder:
         for batch in _batched(texts, EMBEDDING_BATCH_SIZE):
             vectors.extend(await self._embed_batch(batch))
         return vectors
+
+    async def embed_query(self, text: str) -> list[float]:
+        # aembed_query applies the RETRIEVAL_QUERY task type rather than the
+        # RETRIEVAL_DOCUMENT one configured on the client for the corpus side.
+        delay = 1.0
+        for attempt in range(1, MAX_EMBEDDING_ATTEMPTS + 1):
+            try:
+                return await self._client.aembed_query(text)
+            except Exception as exc:
+                if attempt == MAX_EMBEDDING_ATTEMPTS or not _is_retryable(exc):
+                    raise
+                await asyncio.sleep(delay)
+                delay *= 2
+        raise AssertionError("unreachable")
 
     async def _embed_batch(self, batch: Sequence[str]) -> list[list[float]]:
         delay = 1.0

@@ -47,3 +47,10 @@ jobs:
 
       - name: Pytest
         run: pytest
+
+      # Non-blocking on purpose: retrieval quality moves for legitimate
+      # reasons, so a drop is information to look at, not a reason to fail a
+      # build. The number is in the job log.
+      - name: Retrieval evaluation
+        continue-on-error: true
+        run: python -m app.ai.eval.run_eval

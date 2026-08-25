@@ -47,6 +47,14 @@ class Settings(BaseSettings):
     embedding_model: str = "gemini-embedding-2"
     google_api_key: str = ""
 
+    # fake | gemini -- same split as the embedder. fake answers from the
+    # retrieved context deterministically, so the whole RAG path is testable
+    # without a key, a network call or a bill.
+    llm_provider: Literal["fake", "gemini"] = "fake"
+    # Passed to langchain's init_chat_model, which is provider-agnostic --
+    # swapping to OpenAI is this one string (SPEC-v2 D18).
+    llm_model: str = "google_genai:gemini-2.5-flash"
+
     # Migrations and the ingestion worker both run inside the API process
     # (SPEC-v2 §3, §6). On by default so `docker compose up` is the whole of
     # local setup; the lifespan is the only thing that reads these, and the

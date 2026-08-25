@@ -67,3 +67,32 @@ MAX_INGESTION_ATTEMPTS = 3
 # is what keeps the project inside the budget.
 INGESTION_POLL_SECONDS = 5.0
 INGESTION_MAX_POLL_SECONDS = 30.0
+
+
+# SPEC-v2 §5: the useful range for hnsw.ef_search is 40-200, and values much
+# above that can flip the planner to a sequential scan.
+HNSW_EF_SEARCH = 60
+
+# Each retriever returns this many candidates before fusion; the fused list is
+# then cut to RETRIEVAL_TOP_K.
+RETRIEVAL_CANDIDATES = 20
+RETRIEVAL_TOP_K = 6
+
+# Reciprocal Rank Fusion's damping constant. 60 is the value from the original
+# RRF paper and the one every implementation since has used -- it keeps a
+# result ranked first in one retriever from dominating a result ranked
+# consistently well in both.
+RRF_K = 60
+
+# How much of a chunk is snapshotted onto a citation. The snapshot is what
+# survives the source document being deleted (SPEC-v2 D5), so it has to be
+# long enough to stand as evidence on its own.
+CITATION_QUOTE_CHARS = 400
+
+CHAT_TITLE_MAX_CHARS = 80
+
+
+class ChatRole(StrEnum):
+    USER = "user"
+    ASSISTANT = "assistant"
+    TOOL = "tool"

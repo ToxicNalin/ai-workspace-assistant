@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.jwt import create_access_token
 from app.auth.password import hash_password
 from app.constants import DocumentStatus, WorkspaceRole
+from app.database.models.chat import ChatThread
 from app.database.models.document import Document
 from app.database.models.membership import WorkspaceMember
 from app.database.models.user import User
@@ -148,3 +149,69 @@ def make_pdf_bytes(pages: Sequence[str]) -> bytes:
     ).encode("ascii")
 
     return bytes(out)
+
+
+async def make_indexed_document(
+    db: AsyncSession,
+    *,
+    workspace: Workspace,
+    uploaded_by: User,
+    name: str = "handbook.txt",
+    texts: Sequence[str] = ("Some indexed content.",),
+) -> Document:
+    """A `ready` document with real chunks and real embeddings, inserted
+    directly.
+
+    Bypasses upload and the ingestion queue on purpose: retrieval and chat
+    tests are about what happens once a corpus exists, and driving the whole
+    of Step 3 and Step 4 to arrive there would make them slow and would mean
+    a break in ingestion failed these suites too.
+    """
+    from app.ai.embeddings.embedder import FakeEmbedder
+    from app.database.models.chunk import DocumentChunk
+
+    document = Document(
+        workspace_id=workspace.id,
+        name=name,
+        storage_key=f"{workspace.id}/{uuid.uuid4()}-{name}",
+        content_hash=uuid.uuid4().hex,
+        mime_type="text/plain",
+        size_bytes=sum(len(text) for text in texts),
+        uploaded_by=uploaded_by.id,
+        status=DocumentStatus.READY,
+        chunk_count=len(texts),
+    )
+    db.add(document)
+    await db.flush()
+
+    vectors = await FakeEmbedder().embed_documents(list(texts))
+    db.add_all(
+        [
+            DocumentChunk(
+                workspace_id=workspace.id,
+                document_id=document.id,
+                text=text,
+                page_no=index + 1,
+                chunk_index=index,
+                embedding=embedding,
+            )
+            for index, (text, embedding) in enumerate(zip(texts, vectors, strict=True))
+        ]
+    )
+    await db.commit()
+    await db.refresh(document)
+    return document
+
+
+async def make_chat_thread(
+    db: AsyncSession,
+    *,
+    workspace: Workspace,
+    user: User,
+    title: str = "Existing conversation",
+) -> ChatThread:
+    thread = ChatThread(workspace_id=workspace.id, user_id=user.id, title=title)
+    db.add(thread)
+    await db.commit()
+    await db.refresh(thread)
+    return thread

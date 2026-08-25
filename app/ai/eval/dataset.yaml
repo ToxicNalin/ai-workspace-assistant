@@ -1,0 +1,149 @@
+# Retrieval evaluation set.
+#
+# SPEC-v2 §8 lists this as one of two additions "worth more than another
+# feature": almost nobody measures retrieval at portfolio level, and it is the
+# difference between "I used LangChain" and "I measured my retrieval".
+#
+# The corpus lives here rather than as loose files so the whole set is one
+# reviewable artefact and the run needs no fixtures on disk. Questions are
+# deliberately mixed: some are paraphrases that only vector search will catch,
+# some are bare identifiers that only lexical search will catch. A set made
+# entirely of one kind would report a flattering number and measure nothing.
+
+corpus:
+  - name: expenses-policy.md
+    chunks:
+      - "Expense claims must be submitted within thirty days of the date on the receipt. Claims submitted after that window require written approval from a department head."
+      - "Reimbursement is paid into the same account as salary, on the next payroll run after approval. Finance does not issue separate payments for expenses."
+      - "Alcohol is not reimbursable. Meals during client entertainment are reimbursable up to forty pounds per head."
+
+  - name: leave-policy.md
+    chunks:
+      - "Annual leave entitlement is twenty-eight days per year including public holidays. Entitlement accrues monthly from the start date."
+      - "Requests for annual leave must be made at least two weeks in advance through the leave system, and require line manager approval."
+      - "Up to five days of unused annual leave may be carried into the following year. Anything beyond five days is forfeited on the thirty-first of December."
+
+  - name: security-runbook.md
+    chunks:
+      - "If the API returns error code E4021 the TLS certificate on the load balancer has expired. Renew it with the certbot job and restart the ingress."
+      - "Error code E5503 indicates the connection pool is exhausted. Check for a long-running migration holding connections before increasing the pool size."
+      - "Production credentials are rotated every ninety days. Rotation requires two administrators and is logged in the audit trail."
+      - "Never paste production credentials into a support ticket. Use the secrets manager share link, which expires after one hour."
+
+  - name: onboarding-guide.md
+    chunks:
+      - "New starters are issued a laptop on their first day. IT provisions accounts the working day before the start date."
+      - "Every new engineer is assigned an onboarding buddy for their first month. The buddy is responsible for the first code review."
+      - "The development environment is started with docker compose up. The API is then reachable on port 8000."
+
+  - name: incident-process.md
+    chunks:
+      - "A severity one incident is any complete outage of the customer-facing API, or any confirmed exposure of customer data."
+      - "The incident commander is the first responder to acknowledge the page. That role is separate from whoever is fixing the problem."
+      - "A written postmortem is required within five working days of any severity one incident. Postmortems are blameless and are published internally."
+
+questions:
+  # -- Paraphrases. The wording shares few words with the source, so lexical
+  #    search alone should struggle and the vector half should carry these.
+  - question: How long do I have to claim back money I spent?
+    expect_document: expenses-policy.md
+    expect_text: thirty days
+
+  - question: When does my holiday allowance get topped up?
+    expect_document: leave-policy.md
+    expect_text: accrues monthly
+
+  - question: Can I keep unused holiday for next year?
+    expect_document: leave-policy.md
+    expect_text: five days
+
+  - question: Who reviews my first pull request?
+    expect_document: onboarding-guide.md
+    expect_text: onboarding buddy
+
+  - question: What counts as the most serious kind of outage?
+    expect_document: incident-process.md
+    expect_text: severity one
+
+  - question: Do I get paid expenses separately from my wages?
+    expect_document: expenses-policy.md
+    expect_text: next payroll run
+
+  - question: Is a write-up required after something goes badly wrong?
+    expect_document: incident-process.md
+    expect_text: postmortem
+
+  - question: How much can I spend taking a customer to dinner?
+    expect_document: expenses-policy.md
+    expect_text: forty pounds
+
+  # -- Exact identifiers. Vector search is famously poor at these; this is the
+  #    half of the set that justifies hybrid retrieval being the default.
+  - question: E4021
+    expect_document: security-runbook.md
+    expect_text: certificate
+
+  - question: What does error code E5503 mean?
+    expect_document: security-runbook.md
+    expect_text: connection pool
+
+  - question: certbot
+    expect_document: security-runbook.md
+    expect_text: certbot
+
+  - question: docker compose up
+    expect_document: onboarding-guide.md
+    expect_text: port 8000
+
+  # -- Direct questions. Both halves should find these; they are the baseline.
+  - question: How much annual leave do I get?
+    expect_document: leave-policy.md
+    expect_text: twenty-eight days
+
+  - question: How far in advance must I request leave?
+    expect_document: leave-policy.md
+    expect_text: two weeks
+
+  - question: How often are production credentials rotated?
+    expect_document: security-runbook.md
+    expect_text: ninety days
+
+  - question: Can I claim for alcohol?
+    expect_document: expenses-policy.md
+    expect_text: not reimbursable
+
+  - question: When do new starters get their laptop?
+    expect_document: onboarding-guide.md
+    expect_text: first day
+
+  - question: Who is the incident commander?
+    expect_document: incident-process.md
+    expect_text: first responder
+
+  - question: How do I share production credentials with support?
+    expect_document: security-runbook.md
+    expect_text: secrets manager
+
+  - question: How long do I have to write the postmortem?
+    expect_document: incident-process.md
+    expect_text: five working days
+
+  - question: Do I need approval to take annual leave?
+    expect_document: leave-policy.md
+    expect_text: line manager
+
+  - question: What happens if I claim expenses late?
+    expect_document: expenses-policy.md
+    expect_text: department head
+
+  - question: How many administrators are needed to rotate credentials?
+    expect_document: security-runbook.md
+    expect_text: two administrators
+
+  - question: When are accounts set up for a new joiner?
+    expect_document: onboarding-guide.md
+    expect_text: working day before
+
+  - question: Is a postmortem used to assign blame?
+    expect_document: incident-process.md
+    expect_text: blameless
