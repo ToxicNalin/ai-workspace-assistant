@@ -1,0 +1,15 @@
+{
+  // Cloudflare Workers Static Assets. There is no `main` entrypoint on purpose:
+  // this is a pure static SPA, so the assets binding serves every request and no
+  // Worker script runs. Adding one would mean paying a script invocation to hand
+  // back a file the CDN can already serve.
+  "name": "ai-workspace-assistant",
+  "compatibility_date": "2026-08-27",
+  "assets": {
+    "directory": "./dist",
+    // A deep link like /w/<id>/approvals matches no file on disk. Hand every
+    // unmatched path to index.html and let the router resolve it -- the same job
+    // public/_redirects does on Pages.
+    "not_found_handling": "single-page-application"
+  }
+}
