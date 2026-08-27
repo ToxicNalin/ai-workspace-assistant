@@ -128,5 +128,10 @@ def outbox(monkeypatch: pytest.MonkeyPatch) -> ConsoleEmailProvider:
     the same instance -- and its accumulated outbox -- into every later test.
     """
     provider = ConsoleEmailProvider()
+    # Every call site, not just the approvals one: a route that reaches the
+    # real provider would post to Resend for real if the developer running the
+    # suite has a key in their .env, which is precisely the accident this
+    # fixture exists to make impossible.
     monkeypatch.setattr("app.api.approvals.get_email_provider", lambda: provider)
+    monkeypatch.setattr("app.api.workspace.get_email_provider", lambda: provider)
     return provider

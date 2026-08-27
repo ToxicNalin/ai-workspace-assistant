@@ -37,7 +37,7 @@ from app.constants import AuditAction, PendingActionType
 from app.database.models.pending_action import PendingAction
 from app.database.models.user import User
 from app.exceptions import AppError, UpstreamFailure
-from app.services import audit_service, calendar_service, task_service
+from app.services import audit_service, calendar_service, email_service, task_service
 from app.services.email_service import (
     EmailAttachment,
     EmailProvider,
@@ -80,6 +80,21 @@ def _people(payload: dict[str, Any], field: str) -> list[ResolvedMember]:
     return people
 
 
+def _refuse_if_undeliverable() -> None:
+    """Fail an action that would be a no-op, instead of claiming it worked.
+
+    The bug this exists to prevent: `EMAIL_PROVIDER` unset in a deployment's
+    dashboard falls back to `console`, which accepts every message, returns a
+    message id and reports success -- so the row says `executed`, the agent
+    replies "the email was sent", and nothing was ever sent. Failing loudly is
+    the only honest answer, and `failed` makes a retry after fixing the
+    configuration the obvious next step.
+    """
+    reason = email_service.delivery_blocked()
+    if reason is not None:
+        raise UpstreamFailure(f"This deployment cannot send email. {reason}")
+
+
 def _requester_reply_to(requester: User | None) -> str | None:
     """SPEC-v2 D16: `From:` is a no-reply sender the project controls, so a
     reply has to be routed deliberately. It goes to the person who asked for
@@ -98,6 +113,13 @@ async def _execute_send_email(
     recipients = _people(action.payload, "recipients")
     if not recipients:
         raise UpstreamFailure("This action has no recipients left to send to")
+
+    # An email is *only* its delivery. If this deployment cannot deliver, there
+    # is nothing left for the action to have done, so it fails here rather than
+    # being recorded as `executed` and reported back as sent. Production only:
+    # locally and under test the console provider is the intended behaviour and
+    # its outbox is what the suite asserts against.
+    _refuse_if_undeliverable()
 
     subject = str(action.payload.get("subject", ""))
     sent = await mailer.send(
@@ -152,6 +174,13 @@ async def _execute_create_event(
 ) -> ExecutionOutcome:
     guests = _people(action.payload, "guests")
     title = str(action.payload.get("title", ""))
+
+    # Checked before anything is inserted rather than at the send below. An
+    # event nobody is told about is not the action that was approved, and
+    # failing first means there is no event row for `_mark_failed` to roll
+    # back. An event with no guests sends no mail, so it is unaffected.
+    if guests:
+        _refuse_if_undeliverable()
 
     event = await calendar_service.create_event(
         db,

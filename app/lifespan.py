@@ -12,6 +12,7 @@ from sqlalchemy.pool import NullPool
 from app.ai.agent.checkpointer import close_checkpointer, setup_checkpointer
 from app.config import get_settings
 from app.database.session import async_session_factory
+from app.services import email_service
 from app.workers.runner import IngestionRunner
 
 logger = logging.getLogger(__name__)
@@ -59,9 +60,31 @@ async def run_migrations() -> None:
     logger.info("migrations up to date")
 
 
+def _warn_if_mail_is_undeliverable() -> None:
+    """Say at boot what would otherwise be found out by a missing email.
+
+    Not fatal: a deployment that cannot send mail still serves chat, documents
+    and retrieval perfectly well, and refusing to start would be a worse
+    trade than a line in the log. The line is the point -- an unset
+    `EMAIL_PROVIDER` is invisible everywhere else, because falling back to the
+    console provider is exactly what the local default is supposed to do.
+    """
+    reason = email_service.undeliverable_reason()
+    if reason is None:
+        return
+
+    settings = get_settings()
+    if settings.environment == "production":
+        logger.warning("this deployment cannot send email: %s", reason)
+    else:
+        logger.info("email is not being delivered: %s", reason)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
+
+    _warn_if_mail_is_undeliverable()
 
     if settings.run_migrations_on_startup:
         await run_migrations()

@@ -99,6 +99,24 @@ class ConsoleEmailProvider:
         self.outbox.clear()
 
 
+def _refusal_reason(response: httpx.Response) -> str:
+    """The provider's own explanation for a 4xx/5xx, if it gave one.
+
+    Defensive on every step: a refusal is exactly the moment a provider is
+    least likely to return the JSON its documentation promises, and a
+    diagnostic that raises while explaining a failure is worse than no
+    diagnostic. Truncated because it ends up in an HTTP response body.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return ""
+    if not isinstance(body, dict):
+        return ""
+    message = body.get("message")
+    return str(message)[:300] if isinstance(message, str) else ""
+
+
 class ResendEmailProvider:
     """Resend's REST API. One POST, no SDK.
 
@@ -151,12 +169,21 @@ class ResendEmailProvider:
             raise UpstreamFailure("The email provider could not be reached") from exc
 
         if response.status_code >= 400:
+            # Resend's refusals are self-explaining and carry no credential --
+            # "you can only send testing emails to your own email address",
+            # "domain is not verified". Swallowing that and reporting a bare
+            # status code is what turns a five-minute dashboard fix into an
+            # afternoon, so the message is passed through to whoever approved
+            # the action. Only the provider's own `message` field, never the
+            # whole body and never the request.
+            reason = _refusal_reason(response)
             logger.warning(
                 "email provider refused the message",
-                extra={"status": response.status_code},
+                extra={"status": response.status_code, "reason": reason},
             )
             raise UpstreamFailure(
                 f"The email provider refused the message ({response.status_code})"
+                + (f": {reason}" if reason else "")
             )
 
         body = response.json()
@@ -214,3 +241,43 @@ def provider_is_configured() -> bool:
     """
     settings = get_settings()
     return settings.email_provider != "resend" or bool(settings.resend_api_key)
+
+
+def undeliverable_reason() -> str | None:
+    """Why mail from this deployment cannot reach a real inbox, or None.
+
+    A stricter question than `provider_is_configured`, and the distinction is
+    the whole point. Console is a perfectly *configured* provider; it just
+    delivers to a list in memory. Locally and in tests that is the intent. In
+    production it means every approved email is recorded as sent and none of
+    them exist, which is the worst failure mode this application has: silent,
+    and indistinguishable from success to the person who approved it.
+
+    Callers use this to make that state loud -- a warning at boot, a refusal
+    at execution time -- rather than letting it be discovered by a colleague
+    who never received the message.
+    """
+    settings = get_settings()
+
+    if settings.email_provider == "console":
+        return (
+            "EMAIL_PROVIDER is 'console', which records messages instead of sending them. "
+            "Set EMAIL_PROVIDER=resend and RESEND_API_KEY to deliver mail."
+        )
+    if not settings.resend_api_key:
+        return "RESEND_API_KEY is not set, so the email provider cannot authenticate."
+    return None
+
+
+def delivery_blocked() -> str | None:
+    """`undeliverable_reason()`, but only where it is a mistake rather than
+    the point.
+
+    The environment check lives here rather than at each call site so that
+    "console is intended locally, and a misconfiguration in production" is one
+    fact in one place -- every caller that has to distinguish the two asks the
+    same question and gets the same answer.
+    """
+    if get_settings().environment != "production":
+        return None
+    return undeliverable_reason()

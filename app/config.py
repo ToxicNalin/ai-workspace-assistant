@@ -11,6 +11,14 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     cors_origins: list[str] = []
 
+    # Where the SPA is reachable from a browser. Only mail needs this: an
+    # invite is useless without a link, and a link has to be absolute because
+    # it is read outside the application. Kept separate from `cors_origins`
+    # rather than taking the first entry of it -- that list is a security
+    # boundary whose order carries no meaning, and quietly making its first
+    # element load-bearing is how a reordering turns into broken invites.
+    app_base_url: str = "http://localhost:5173"
+
     # Matches docker-compose's local db service. Render's dashboard sets the
     # real Neon pooled connection string in production — never committed.
     database_url: str = "postgresql+asyncpg://app:app@localhost:5432/app"

@@ -17,6 +17,7 @@ from app.schemas.workspace import (
     WorkspaceOut,
 )
 from app.services import invite_service, workspace_service
+from app.services.email_service import get_email_provider
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 
@@ -80,8 +81,9 @@ async def create_invite(
     db: DbSession,
     context: Annotated[WorkspaceContext, Depends(require_admin)],
 ) -> InviteOut:
-    invite, raw_token = await invite_service.create_invite(
+    invite, raw_token, email_sent = await invite_service.create_invite(
         db,
+        mailer=get_email_provider(),
         workspace_id=context.workspace_id,
         invited_by=context.user,
         email=body.email,
@@ -89,4 +91,5 @@ async def create_invite(
     )
     out = InviteOut.model_validate(invite)
     out.token = raw_token
+    out.email_sent = email_sent
     return out

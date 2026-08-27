@@ -13,21 +13,25 @@ asserting is the shape of the request, not that httpx can post.
 import base64
 import uuid
 
+import httpx
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.constants import AuditAction, PendingActionOrigin, PendingActionStatus
 from app.database.models.audit_log import AuditLogEntry
 from app.database.models.pending_action import PendingAction
 from app.exceptions import UpstreamFailure
+from app.services import email_service
 from app.services.email_service import (
     ConsoleEmailProvider,
     EmailAttachment,
     GmailEmailProvider,
     OutboundEmail,
     ResendEmailProvider,
+    _refusal_reason,
 )
 from app.tests.factories import (
     auth_headers,
@@ -306,3 +310,106 @@ async def test_a_manual_action_is_still_bound_to_its_payload_hash(
     await db_session.refresh(stored)
     assert stored.status is PendingActionStatus.PENDING
     assert stored.origin is PendingActionOrigin.MANUAL
+
+
+# --------------------------------------------------------------------------
+# Undeliverable deployments.
+#
+# The failure these cover is the quietest one this application can have: with
+# EMAIL_PROVIDER unset, a production deployment falls back to the console
+# provider, every approved email is recorded as `executed`, the agent reports
+# it as sent, and nothing is ever sent.
+# --------------------------------------------------------------------------
+
+
+def test_a_refused_message_carries_the_providers_own_explanation() -> None:
+    """Resend's 403 says *why* -- an unverified domain, or a testing sender
+    that may only mail its own account holder. A bare status code turns a
+    dashboard fix into a hunt, so the message is passed through."""
+    response = httpx.Response(
+        403,
+        json={
+            "statusCode": 403,
+            "message": "You can only send testing emails to your own email address",
+            "name": "validation_error",
+        },
+    )
+
+    assert (
+        _refusal_reason(response)
+        == "You can only send testing emails to your own email address"
+    )
+
+
+@pytest.mark.parametrize("body", [b"<html>502 Bad Gateway</html>", b"[]", b""])
+def test_an_unparseable_refusal_does_not_raise(body: bytes) -> None:
+    """A refusal is exactly when a provider is least likely to return the JSON
+    its documentation promises, and a diagnostic that raises while explaining a
+    failure is worse than no diagnostic."""
+    assert _refusal_reason(httpx.Response(502, content=body)) == ""
+
+
+def test_console_is_configured_but_not_deliverable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The two questions are different and the distinction is the whole point:
+    console is a perfectly configured provider that delivers to a list in
+    memory."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "email_provider", "console")
+
+    assert email_service.provider_is_configured() is True
+    reason = email_service.undeliverable_reason()
+    assert reason is not None and "EMAIL_PROVIDER" in reason
+
+
+def test_resend_without_a_key_is_undeliverable(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "email_provider", "resend")
+    monkeypatch.setattr(settings, "resend_api_key", "")
+
+    reason = email_service.undeliverable_reason()
+    assert reason is not None and "RESEND_API_KEY" in reason
+
+    monkeypatch.setattr(settings, "resend_api_key", "re_key")
+    assert email_service.undeliverable_reason() is None
+
+
+async def test_approving_a_send_in_an_undeliverable_production_deployment_fails(
+    db_session: AsyncSession,
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    outbox: ConsoleEmailProvider,
+) -> None:
+    """The regression this file exists for. An approval that cannot possibly
+    deliver must land on `failed`, not `executed` -- otherwise the status
+    column means "somebody clicked approve" rather than "this happened"."""
+    admin = await make_user(db_session, email=random_email(), name="Alice Smith")
+    colleague = await make_user(db_session, email=random_email(), name="Bob Jones")
+    workspace = await make_workspace(db_session, owner=admin)
+    await make_member(db_session, workspace=workspace, user=colleague)
+
+    proposed = await client.post(
+        f"/workspaces/{workspace.id}/email/send",
+        json={"recipients": ["Bob Jones"], "subject": "Hello", "body": "Body."},
+        headers=auth_headers(admin),
+    )
+    assert proposed.status_code == 202
+    action = proposed.json()
+
+    # Console provider, production environment: the misconfiguration itself.
+    monkeypatch.setattr(get_settings(), "environment", "production")
+
+    decided = await client.post(
+        f"/workspaces/{workspace.id}/pending-actions/{action['id']}/decide",
+        json={"decision": "approve", "payload_hash": action["payload_hash"]},
+        headers=auth_headers(admin),
+    )
+
+    assert decided.status_code == 502
+    assert "cannot send email" in decided.json()["detail"]
+
+    # Nothing was handed to the provider, and the row says so.
+    assert outbox.outbox == []
+    row = await db_session.get(PendingAction, uuid.UUID(action["id"]))
+    assert row is not None
+    await db_session.refresh(row)
+    assert row.status is PendingActionStatus.FAILED

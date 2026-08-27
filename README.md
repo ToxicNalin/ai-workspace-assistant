@@ -434,6 +434,22 @@ everything is a 401".
 `/health` never touches Postgres, which is exactly why the keep-warm ping costs
 nothing against Neon's 100 compute-hours.
 
+**Mail has two traps, and both are silent.** `EMAIL_PROVIDER` defaults to
+`console`, which records messages instead of sending them — exactly right for a
+fresh clone, and a deployment that forgets to set `resend` reports every
+approved email as sent while none of them exist. In production the app now
+refuses such an action outright (`failed`, with the reason) and logs a warning
+at boot, but the fix is the dashboard: set `EMAIL_PROVIDER=resend` and
+`RESEND_API_KEY`. Then the second trap — the default sender
+`onboarding@resend.dev` will only deliver to the address the Resend account was
+registered with, and refuses anything else with a 403. Verify a domain in
+Resend and set `EMAIL_FROM_ADDRESS` to it before mailing anyone else.
+`GET /workspaces/{id}/email/status` answers both questions from a live
+deployment.
+
+`APP_BASE_URL` is the SPA's origin, and only invitation emails use it — the
+link they carry is read outside the application, so it has to be absolute.
+
 `python -m scripts.check_storage` verifies the object-storage credentials before
 you find out during a demo.
 

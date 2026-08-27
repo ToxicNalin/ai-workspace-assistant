@@ -187,10 +187,18 @@ function InviteDialog({ open, onClose }: { open: boolean; onClose: () => void })
 
       {created !== null && link !== null ? (
         <div className="stack">
-          <Banner tone="success">
-            Invite created for <strong>{created.email}</strong>. It expires{" "}
-            {formatDate(created.expires_at)}.
-          </Banner>
+          {created.email_sent === false ? (
+            <Banner tone="warning">
+              Invite created for <strong>{created.email}</strong>, but the invitation
+              email could not be sent — this deployment has no working mail provider.
+              Send them the link below yourself. It expires {formatDate(created.expires_at)}.
+            </Banner>
+          ) : (
+            <Banner tone="success">
+              Invite created for <strong>{created.email}</strong> and the link emailed to
+              them. It expires {formatDate(created.expires_at)}.
+            </Banner>
+          )}
           <Field
             label="Invite link"
             hint="Copy it now. Only a hash of this token is stored, so it cannot be shown again."

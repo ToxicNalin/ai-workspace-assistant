@@ -66,6 +66,12 @@ export interface Invite {
   expires_at: Timestamp;
   /** Returned exactly once, by the call that created the invite. */
   token: string | null;
+  /**
+   * Whether the invitation email went out. Also only on the creation call.
+   * `false` means the invite exists but nobody has been told about it, so the
+   * link above is the only copy there is.
+   */
+  email_sent: boolean | null;
 }
 
 export interface Document {

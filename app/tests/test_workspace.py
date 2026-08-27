@@ -1,6 +1,11 @@
+import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
+from app.exceptions import UpstreamFailure
+from app.services import invite_service
+from app.services.email_service import ConsoleEmailProvider, OutboundEmail, SentEmail
 from app.tests.factories import auth_headers, make_member, make_user, make_workspace
 
 
@@ -224,3 +229,117 @@ async def test_member_cannot_remove_another_member(
     )
 
     assert response.status_code == 403
+
+
+# --------------------------------------------------------------------------
+# The invitation email.
+#
+# An invite whose link never reaches anybody is not an invite. These pin down
+# that one goes out, that it carries a link the SPA's /join route can actually
+# redeem, and -- the case that matters most -- that a mail provider failing
+# does not lose the invite along with the email.
+# --------------------------------------------------------------------------
+
+
+async def test_creating_an_invite_emails_the_link(
+    db_session: AsyncSession, client: AsyncClient, outbox: ConsoleEmailProvider
+) -> None:
+    admin = await make_user(db_session, email="inviter@example.com", name="Alice Smith")
+    workspace = await make_workspace(db_session, owner=admin, name="Acme")
+
+    response = await client.post(
+        f"/workspaces/{workspace.id}/invite",
+        json={"email": "Newcomer@Example.com", "role": "member"},
+        headers=auth_headers(admin),
+    )
+
+    assert response.status_code == 201
+    assert response.json()["email_sent"] is True
+
+    assert len(outbox.outbox) == 1
+    message = outbox.outbox[0]
+    # Normalised to lower case by the service, so the address the invite is
+    # checked against at redemption time is the address it was sent to.
+    assert message.to == ["newcomer@example.com"]
+    assert "Alice Smith" in message.subject
+    assert "Acme" in message.subject
+    # A reply reaches the colleague who invited them, not the no-reply sender.
+    assert message.reply_to == "inviter@example.com"
+
+    token = response.json()["token"]
+    assert f"/join?token={token}" in message.body
+
+
+async def test_the_invite_link_uses_the_configured_app_base_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The link is read outside the application, so it has to be absolute --
+    and a trailing slash on the setting must not double up in the URL."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_base_url", "https://app.example.com/")
+
+    assert invite_service.invite_link("abc-123") == "https://app.example.com/join?token=abc-123"
+
+
+async def test_an_invite_survives_the_email_failing(
+    db_session: AsyncSession, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The invite is committed before the send, so a provider outage costs the
+    email and not the invitation. The raw token still comes back, which is the
+    admin's way of passing the link on by hand."""
+
+    class BrokenProvider(ConsoleEmailProvider):
+        async def send(self, message: OutboundEmail) -> SentEmail:
+            raise UpstreamFailure("The email provider could not be reached")
+
+    monkeypatch.setattr("app.api.workspace.get_email_provider", BrokenProvider)
+
+    admin = await make_user(db_session, email="inviter2@example.com")
+    invitee = await make_user(db_session, email="invitee2@example.com")
+    workspace = await make_workspace(db_session, owner=admin)
+
+    response = await client.post(
+        f"/workspaces/{workspace.id}/invite",
+        json={"email": "invitee2@example.com", "role": "member"},
+        headers=auth_headers(admin),
+    )
+
+    assert response.status_code == 201
+    assert response.json()["email_sent"] is False
+    token = response.json()["token"]
+    assert token
+
+    # And the invite genuinely works -- it was created, not rolled back.
+    join = await client.post(
+        "/workspaces/join", json={"token": token}, headers=auth_headers(invitee)
+    )
+    assert join.status_code == 200
+
+
+async def test_a_production_deployment_that_cannot_send_says_so(
+    db_session: AsyncSession,
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    outbox: ConsoleEmailProvider,
+) -> None:
+    """The console provider accepts every message and reports success, so
+    `email_sent` cannot be inferred from the send returning. In production it
+    is asked before the send, or an admin would never think to pass the link
+    on by hand."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "production")
+    monkeypatch.setattr(settings, "email_provider", "console")
+
+    admin = await make_user(db_session, email="inviter3@example.com")
+    workspace = await make_workspace(db_session, owner=admin)
+
+    response = await client.post(
+        f"/workspaces/{workspace.id}/invite",
+        json={"email": "invitee3@example.com", "role": "member"},
+        headers=auth_headers(admin),
+    )
+
+    assert response.status_code == 201
+    assert response.json()["email_sent"] is False
+    assert response.json()["token"]
+    assert outbox.outbox == []
