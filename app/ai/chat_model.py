@@ -3,6 +3,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from app.ai.upstream import THE_ASSISTANT, provider_errors
 from app.constants import CHARS_PER_TOKEN_ESTIMATE
 
 _EXCERPT = re.compile(
@@ -129,8 +130,18 @@ def _text_of(message: Any) -> str:
 
     `content` is a string for most providers and a list of content blocks for
     some, and which one arrives is not worth making every caller care about.
+
+    The string check has to come before the callable one, for the reason
+    app/ai/agent/state.py sets out at length: `.text` is currently a
+    `TextAccessor`, a str subclass that is *also* callable for back-compat with
+    the older `.text()` method. Testing `callable` first therefore takes the
+    deprecated path on every real provider response -- it works today, emits a
+    LangChainDeprecationWarning on every call, and breaks outright when that
+    back-compat is removed.
     """
     text = getattr(message, "text", None)
+    if isinstance(text, str):
+        return str(text)
     if callable(text):
         return str(text())
 
@@ -184,7 +195,10 @@ class GeminiChatModel:
         return [SystemMessage(content=system), HumanMessage(content=user)]
 
     async def complete(self, *, system: str, user: str) -> Completion:
-        response = await self._model.ainvoke(self._messages(system, user))
+        # SPEC-v2 §7: the free tier's own rate limit is the error a public demo
+        # is most likely to hit, and it must not arrive as a 500.
+        with provider_errors(THE_ASSISTANT):
+            response = await self._model.ainvoke(self._messages(system, user))
         text = _text_of(response)
         return Completion(
             text=text,
@@ -195,15 +209,19 @@ class GeminiChatModel:
         collected: list[str] = []
         usage: Usage | None = None
 
-        async for chunk in self._model.astream(self._messages(system, user)):
-            # Usage can arrive on any chunk depending on the provider, and for
-            # several it arrives only on the last one. Keep whatever turns up
-            # and settle the total after the stream closes.
-            usage = _usage_of(chunk) or usage
-            text = _text_of(chunk)
-            if text:
-                collected.append(text)
-                yield StreamChunk(text=text)
+        # Wrapping the whole loop, not just its first step: a provider can fail
+        # part-way through a stream. Nothing here catches CancelledError or
+        # GeneratorExit, so a client that walks away is not logged as an outage.
+        with provider_errors(THE_ASSISTANT):
+            async for chunk in self._model.astream(self._messages(system, user)):
+                # Usage can arrive on any chunk depending on the provider, and
+                # for several it arrives only on the last one. Keep whatever
+                # turns up and settle the total after the stream closes.
+                usage = _usage_of(chunk) or usage
+                text = _text_of(chunk)
+                if text:
+                    collected.append(text)
+                    yield StreamChunk(text=text)
 
         answer = "".join(collected)
         yield StreamChunk(

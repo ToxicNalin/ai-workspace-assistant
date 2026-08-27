@@ -23,6 +23,7 @@ from app.ai.agent.graph import build_agent
 from app.ai.agent.state import ProposedAction, parse_interrupts, reply_text
 from app.ai.tools.base import ActionRefused, InvalidActionArguments
 from app.ai.tools.resolve import ResolvedMember, resolve_members
+from app.ai.upstream import THE_AGENT, provider_errors
 from app.constants import (
     MAX_TASKS_PER_ACTION,
     AuditAction,
@@ -193,7 +194,11 @@ async def run_agent(
     # The graph's thread_id is the chat thread's, so a paused approval is
     # attached to the conversation it came from and survives a restart.
     config: Any = {"configurable": {"thread_id": str(thread.id)}}
-    result = await agent.ainvoke({"messages": [("user", message)]}, config=config)
+    # An agent turn is several provider calls behind one await, and on the free
+    # tier the likeliest way it fails is the quota rather than a bug here
+    # (SPEC-v2 §7).
+    with provider_errors(THE_AGENT):
+        result = await agent.ainvoke({"messages": [("user", message)]}, config=config)
 
     # Summed across every message the run produced, not read off the last one:
     # a turn that searched the corpus and then drafted an email was billed
@@ -283,7 +288,8 @@ async def run_agent(
         resume = [
             decision or {"type": "reject", "message": "Refused."} for decision in decisions
         ]
-        await agent.ainvoke(Command(resume={"decisions": resume}), config=config)
+        with provider_errors(THE_AGENT):
+            await agent.ainvoke(Command(resume={"decisions": resume}), config=config)
         reply = reply or "That action was refused: it named someone outside this workspace."
 
     if reply:

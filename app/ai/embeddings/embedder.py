@@ -6,6 +6,7 @@ import random
 from collections.abc import Sequence
 from typing import Protocol
 
+from app.ai.upstream import THE_EMBEDDER, is_retryable, provider_errors
 from app.constants import EMBEDDING_BATCH_SIZE, EMBEDDING_DIMENSIONS, MAX_EMBEDDING_ATTEMPTS
 
 logger = logging.getLogger(__name__)
@@ -110,41 +111,35 @@ class GeminiEmbedder:
     async def embed_query(self, text: str) -> list[float]:
         # aembed_query applies the RETRIEVAL_QUERY task type rather than the
         # RETRIEVAL_DOCUMENT one configured on the client for the corpus side.
-        delay = 1.0
-        for attempt in range(1, MAX_EMBEDDING_ATTEMPTS + 1):
-            try:
-                return await self._client.aembed_query(text)
-            except Exception as exc:
-                if attempt == MAX_EMBEDDING_ATTEMPTS or not _is_retryable(exc):
-                    raise
-                await asyncio.sleep(delay)
-                delay *= 2
+        #
+        # The backoff runs *inside* the wrapper, so a caller only ever sees the
+        # verdict after every attempt has been spent -- not one 429 that the
+        # next retry would have absorbed.
+        with provider_errors(THE_EMBEDDER):
+            delay = 1.0
+            for attempt in range(1, MAX_EMBEDDING_ATTEMPTS + 1):
+                try:
+                    return await self._client.aembed_query(text)
+                except Exception as exc:
+                    if attempt == MAX_EMBEDDING_ATTEMPTS or not is_retryable(exc):
+                        raise
+                    await asyncio.sleep(delay)
+                    delay *= 2
         raise AssertionError("unreachable")
 
     async def _embed_batch(self, batch: Sequence[str]) -> list[list[float]]:
-        delay = 1.0
-        for attempt in range(1, MAX_EMBEDDING_ATTEMPTS + 1):
-            try:
-                return await self._client.aembed_documents(list(batch))
-            except Exception as exc:
-                if attempt == MAX_EMBEDDING_ATTEMPTS or not _is_retryable(exc):
-                    raise
-                logger.warning(
-                    "embedding batch rate limited, backing off",
-                    extra={"attempt": attempt, "delay_seconds": delay},
-                )
-                await asyncio.sleep(delay)
-                delay *= 2
+        with provider_errors(THE_EMBEDDER):
+            delay = 1.0
+            for attempt in range(1, MAX_EMBEDDING_ATTEMPTS + 1):
+                try:
+                    return await self._client.aembed_documents(list(batch))
+                except Exception as exc:
+                    if attempt == MAX_EMBEDDING_ATTEMPTS or not is_retryable(exc):
+                        raise
+                    logger.warning(
+                        "embedding batch rate limited, backing off",
+                        extra={"attempt": attempt, "delay_seconds": delay},
+                    )
+                    await asyncio.sleep(delay)
+                    delay *= 2
         raise AssertionError("unreachable")
-
-
-def _is_retryable(exc: Exception) -> bool:
-    """Gemini's free tier rate limits aggressively. Matching on the message is
-    crude, but the alternative is importing google.api_core just to catch
-    ResourceExhausted -- and the SDK does not surface it consistently anyway.
-    """
-    text = f"{type(exc).__name__} {exc}".lower()
-    return any(
-        marker in text
-        for marker in ("429", "resource", "rate limit", "quota", "unavailable", "503", "timeout")
-    )

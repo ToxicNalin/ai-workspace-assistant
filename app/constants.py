@@ -137,6 +137,14 @@ class AuditAction(StrEnum):
     TASKS_CREATED = "tasks.created"
 
 
+# How long to tell a caller to wait when the model provider says it is out of
+# quota. The providers rarely give a usable number of their own, and a header
+# that says nothing is what makes a client either hammer the endpoint or give
+# up on a limit that has already lifted -- so this is an honest guess rather
+# than no answer (SPEC-v2 §7: "surface a clean 'busy, try again'").
+UPSTREAM_BUSY_RETRY_SECONDS = 30
+
+
 # The read-only tool the agent may call without asking anyone (SPEC-v2 §5).
 AUTO_APPROVED_TOOL = "search_documents"
 

@@ -33,6 +33,7 @@ from app.ai.agent.graph import build_agent
 from app.ai.agent.state import reply_text
 from app.ai.tools.base import ActionRefused
 from app.ai.tools.resolve import UnresolvableRecipient, resolve_members
+from app.ai.upstream import THE_AGENT, provider_errors
 from app.constants import (
     AuditAction,
     ChatRole,
@@ -201,7 +202,8 @@ async def _resume_graph(
 
     agent = build_agent(db, workspace_id, model=model, checkpointer=checkpointer)
     config: Any = {"configurable": {"thread_id": str(action.thread_id)}}
-    result = await agent.ainvoke(Command(resume={"decisions": [resume]}), config=config)
+    with provider_errors(THE_AGENT):
+        result = await agent.ainvoke(Command(resume={"decisions": [resume]}), config=config)
     return reply_text(result)
 
 
