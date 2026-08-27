@@ -24,6 +24,9 @@ dependencies = [
     # an exact pin, so the two can never disagree.
     "botocore>=1.40.46,<1.40.62",
     "python-multipart==0.0.32",
+    # SPEC-v2 §5 corrects v1 on this: EventSourceResponse lives here, not in
+    # starlette.responses, which has no such class.
+    "sse-starlette==3.4.8",
     "pgvector==0.5.0",
     "pypdf==6.16.2",
     "python-docx==1.2.0",

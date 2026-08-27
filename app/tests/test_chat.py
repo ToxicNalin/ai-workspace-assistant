@@ -8,8 +8,10 @@ nothing notices until a user deletes a file and their chat history quietly
 loses its evidence.
 """
 
+import json
 import uuid
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +20,7 @@ from app.ai.chat_model import FakeChatModel
 from app.ai.prompts.rag import build_user_message
 from app.ai.prompts.system import SYSTEM_PROMPT
 from app.ai.retriever.base import RetrievedChunk
+from app.config import get_settings
 from app.constants import WorkspaceRole
 from app.database.models.chat import ChatMessage
 from app.database.models.citation import MessageCitation
@@ -25,6 +28,7 @@ from app.tests.factories import (
     auth_headers,
     make_indexed_document,
     make_member,
+    make_usage_event,
     make_user,
     make_workspace,
     random_email,
@@ -340,6 +344,160 @@ async def test_the_fake_model_only_answers_from_what_it_was_given() -> None:
     the excerpts, every grounding assertion above would be vacuous."""
     model = FakeChatModel()
 
-    answer = await model.complete(system=SYSTEM_PROMPT, user="No excerpts in this message.")
+    completion = await model.complete(
+        system=SYSTEM_PROMPT, user="No excerpts in this message."
+    )
 
-    assert "could not find" in answer.lower()
+    assert "could not find" in completion.text.lower()
+    # Even the double reports usage, so the budget is exercised by the same
+    # tests that exercise everything else rather than only in production.
+    assert completion.usage.tokens_in > 0
+
+
+# --- Step 8: streaming ----------------------------------------------------
+
+
+async def _collect_stream(
+    client: AsyncClient, url: str, headers: dict[str, str]
+) -> list[tuple[str, dict[str, object]]]:
+    """Read an SSE response into (event, data) pairs.
+
+    Parsed by hand rather than with a client library: the ordering guarantee
+    in chat_service.stream_answer is the thing under test, and a library that
+    reassembles events for us would hide exactly the mistake worth catching.
+    """
+    events: list[tuple[str, dict[str, object]]] = []
+    async with client.stream("GET", url, headers=headers) as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+
+        name = ""
+        async for line in response.aiter_lines():
+            if line.startswith("event:"):
+                name = line.removeprefix("event:").strip()
+            elif line.startswith("data:"):
+                events.append((name, json.loads(line.removeprefix("data:").strip())))
+
+    return events
+
+
+async def test_the_stream_delivers_an_answer_in_order(
+    db_session: AsyncSession, client: AsyncClient
+) -> None:
+    """The event order is a contract the frontend depends on.
+
+    Citations after the last token, specifically: sending them earlier would
+    claim an answer cites something it had not finished saying.
+    """
+    user = await make_user(db_session, email=random_email())
+    workspace = await make_workspace(db_session, owner=user)
+    await make_indexed_document(
+        db_session, workspace=workspace, uploaded_by=user, texts=_HANDBOOK
+    )
+
+    events = await _collect_stream(
+        client,
+        f"/workspaces/{workspace.id}/chat/stream?question=When+are+expenses+reimbursed",
+        auth_headers(user),
+    )
+    names = [name for name, _ in events]
+
+    assert names[0] == "meta"
+    assert names[-1] == "done"
+    assert names.count("citations") == 1
+    assert names.index("citations") > max(
+        index for index, name in enumerate(names) if name == "token"
+    )
+    # More than one token event, or it is a buffered answer wearing a
+    # stream's clothing.
+    assert names.count("token") > 1
+
+
+async def test_the_streamed_answer_is_persisted_and_cited(
+    db_session: AsyncSession, client: AsyncClient
+) -> None:
+    user = await make_user(db_session, email=random_email())
+    workspace = await make_workspace(db_session, owner=user)
+    await make_indexed_document(
+        db_session, workspace=workspace, uploaded_by=user, texts=_HANDBOOK
+    )
+
+    events = await _collect_stream(
+        client,
+        f"/workspaces/{workspace.id}/chat/stream?question=When+are+expenses+reimbursed",
+        auth_headers(user),
+    )
+
+    streamed = "".join(
+        str(data["text"]) for name, data in events if name == "token"
+    )
+    done = next(data for name, data in events if name == "done")
+
+    stored = await db_session.get(ChatMessage, uuid.UUID(str(done["message_id"])))
+    assert stored is not None
+    # What the reader saw and what the history will show them tomorrow are
+    # the same text -- a stream that persisted something else would be a
+    # quietly rewritten transcript.
+    assert stored.content == streamed
+
+    citations = (
+        await db_session.scalars(
+            select(MessageCitation).where(MessageCitation.message_id == stored.id)
+        )
+    ).all()
+    assert len(citations) > 0
+
+
+async def test_the_stream_reuses_an_existing_thread(
+    db_session: AsyncSession, client: AsyncClient
+) -> None:
+    user = await make_user(db_session, email=random_email())
+    workspace = await make_workspace(db_session, owner=user)
+    await make_indexed_document(
+        db_session, workspace=workspace, uploaded_by=user, texts=_HANDBOOK
+    )
+    base = f"/workspaces/{workspace.id}/chat/stream?question=When+is+leave+requested"
+
+    first = await _collect_stream(client, base, auth_headers(user))
+    thread_id = str(next(data for name, data in first if name == "meta")["thread_id"])
+
+    second = await _collect_stream(
+        client, f"{base}&thread_id={thread_id}", auth_headers(user)
+    )
+
+    assert str(next(data for name, data in second if name == "meta")["thread_id"]) == (
+        thread_id
+    )
+    messages = await db_session.scalar(
+        select(func.count(ChatMessage.id)).where(
+            ChatMessage.thread_id == uuid.UUID(thread_id)
+        )
+    )
+    # Two turns, each a question and an answer.
+    assert messages == 4
+
+
+async def test_an_exhausted_budget_refuses_the_stream_with_a_status_code(
+    db_session: AsyncSession, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Checked before the response is opened, deliberately.
+
+    Once a 200 and the first byte of an event stream have gone out there is no
+    status code left to report with, and an error event inside a 200 is not
+    something any HTTP client retries correctly.
+    """
+    monkeypatch.setattr(get_settings(), "daily_token_budget", 100)
+
+    user = await make_user(db_session, email=random_email())
+    workspace = await make_workspace(db_session, owner=user)
+    await make_usage_event(
+        db_session, workspace=workspace, user=user, tokens_in=200, tokens_out=0
+    )
+
+    response = await client.get(
+        f"/workspaces/{workspace.id}/chat/stream?question=anything",
+        headers=auth_headers(user),
+    )
+
+    assert response.status_code == 429
+    assert int(response.headers["Retry-After"]) > 0

@@ -29,11 +29,12 @@ from app.constants import (
     ChatRole,
     PendingActionStatus,
     PendingActionType,
+    UsageKind,
 )
 from app.database.models.chat import ChatMessage, ChatThread
 from app.database.models.pending_action import PendingAction
 from app.exceptions import NotFound
-from app.services import audit_service
+from app.services import audit_service, usage_service
 from app.services.chat_service import _derive_title
 from app.services.payload import hash_payload
 
@@ -154,6 +155,13 @@ async def run_agent(
     message: str,
     thread_id: uuid.UUID | None = None,
 ) -> AgentTurn:
+    # Before the thread is opened, before the user's message is written, and
+    # well before the graph runs. An agent turn is the most expensive thing
+    # this application does -- it can fan out into a tool call and several
+    # completions -- so it is the one that most needs stopping at the door
+    # rather than halfway through (SPEC-v2 D22).
+    await usage_service.enforce_budget(db, workspace_id)
+
     if thread_id is None:
         thread = ChatThread(
             workspace_id=workspace_id, user_id=user_id, title=_derive_title(message)
@@ -186,6 +194,21 @@ async def run_agent(
     # attached to the conversation it came from and survives a restart.
     config: Any = {"configurable": {"thread_id": str(thread.id)}}
     result = await agent.ainvoke({"messages": [("user", message)]}, config=config)
+
+    # Summed across every message the run produced, not read off the last one:
+    # a turn that searched the corpus and then drafted an email was billed
+    # twice, and charging it once would make the budget an under-count of
+    # exactly the runs that cost the most.
+    tokens_in, tokens_out = usage_service.tokens_from_messages(result.get("messages", []))
+    usage_service.record(
+        db,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        kind=UsageKind.AGENT,
+        model=getattr(model, "model_name", "") or model.__class__.__name__,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+    )
 
     pending: list[PendingAction] = []
     refused: list[PendingAction] = []

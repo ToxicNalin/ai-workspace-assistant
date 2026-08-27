@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api import (
+    admin,
     approvals,
     auth,
     calendar,
@@ -22,3 +23,4 @@ api_router.include_router(approvals.router)
 api_router.include_router(tasks.router)
 api_router.include_router(calendar.router)
 api_router.include_router(email.router)
+api_router.include_router(admin.router)

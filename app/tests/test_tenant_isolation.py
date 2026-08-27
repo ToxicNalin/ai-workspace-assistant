@@ -128,6 +128,20 @@ TENANT_SCOPED_ROUTES: list[RouteCase] = [
         lambda v: f"/workspaces/{v.workspace_id}/email/send",
         {"recipients": ["Someone"], "subject": "Injected", "body": "Body."},
     ),
+    # Step 8. The stream reads the whole corpus like /chat/query does, and it
+    # has to refuse before the event stream opens -- once a 200 has gone out
+    # there is no status code left to say no with.
+    (
+        "GET",
+        lambda v: f"/workspaces/{v.workspace_id}/chat/stream?question=anything",
+        None,
+    ),
+    # The admin views are the only routes here whose purpose is to report on
+    # other people. BUILD-ORDER names them /admin/usage and /admin/users
+    # unqualified; they are workspace-scoped instead, precisely so these two
+    # cases can exist -- see the module docstring in app/api/admin.py.
+    ("GET", lambda v: f"/workspaces/{v.workspace_id}/admin/usage", None),
+    ("GET", lambda v: f"/workspaces/{v.workspace_id}/admin/users", None),
 ]
 
 

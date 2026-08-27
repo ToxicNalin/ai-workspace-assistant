@@ -46,8 +46,20 @@ class PayloadTooLarge(AppError):
 
 
 class RateLimited(AppError):
+    """Too many requests, or too many tokens.
+
+    Carries `retry_after` because a 429 without one tells a client to guess,
+    and a client that guesses either hammers the endpoint or gives up on a
+    limit that had already lifted. Rendered as the Retry-After header by
+    app/middleware/errors.py.
+    """
+
     status_code = 429
     detail = "Rate limited"
+
+    def __init__(self, detail: str | None = None, *, retry_after: int | None = None) -> None:
+        super().__init__(detail)
+        self.retry_after = retry_after
 
 
 class UpstreamFailure(AppError):

@@ -9,7 +9,9 @@ from app.database.models.invite import WorkspaceInvite
 from app.database.models.membership import WorkspaceMember
 from app.database.models.oauth_credential import OAuthCredential
 from app.database.models.pending_action import PendingAction
+from app.database.models.rate_limit_counter import RateLimitCounter
 from app.database.models.task import Task
+from app.database.models.usage_event import UsageEvent
 from app.database.models.user import User
 from app.database.models.workspace import Workspace
 
@@ -24,7 +26,9 @@ __all__ = [
     "MessageCitation",
     "OAuthCredential",
     "PendingAction",
+    "RateLimitCounter",
     "Task",
+    "UsageEvent",
     "User",
     "Workspace",
     "WorkspaceInvite",

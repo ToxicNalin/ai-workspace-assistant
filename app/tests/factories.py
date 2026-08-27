@@ -12,6 +12,7 @@ from app.constants import (
     PendingActionStatus,
     PendingActionType,
     TaskStatus,
+    UsageKind,
     WorkspaceRole,
 )
 from app.database.models.calendar_event import CalendarEvent
@@ -20,6 +21,7 @@ from app.database.models.document import Document
 from app.database.models.membership import WorkspaceMember
 from app.database.models.pending_action import PendingAction
 from app.database.models.task import Task
+from app.database.models.usage_event import UsageEvent
 from app.database.models.user import User
 from app.database.models.workspace import Workspace
 from app.services.payload import hash_payload
@@ -299,6 +301,37 @@ async def make_calendar_event(
             {"user_id": str(guest.id), "name": guest.name, "email": guest.email}
             for guest in guests
         ],
+    )
+    db.add(event)
+    await db.commit()
+    await db.refresh(event)
+    return event
+
+
+async def make_usage_event(
+    db: AsyncSession,
+    *,
+    workspace: Workspace,
+    user: User | None = None,
+    kind: UsageKind = UsageKind.CHAT,
+    tokens_in: int = 0,
+    tokens_out: int = 0,
+    estimated: bool = False,
+) -> UsageEvent:
+    """A token-spend row, inserted directly.
+
+    Tests about the budget need a workspace that has already spent something,
+    and getting there by asking real questions would make them slow and would
+    couple a limit test to the whole retrieval path.
+    """
+    event = UsageEvent(
+        workspace_id=workspace.id,
+        user_id=user.id if user is not None else None,
+        kind=kind,
+        model="test-model",
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+        estimated=estimated,
     )
     db.add(event)
     await db.commit()

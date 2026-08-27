@@ -4,6 +4,8 @@ import sys
 from datetime import UTC, datetime
 from typing import Any
 
+from app.utils.context import current_context
+
 _RESERVED_LOG_RECORD_ATTRS = frozenset(
     {
         "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
@@ -24,6 +26,11 @@ class JsonFormatter(logging.Formatter):
         }
         if record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
+
+        # Read at format time, not at call time. Nothing that logs has to know
+        # a request is in flight, or pass an id down to be able to say so --
+        # see app/middleware/request_context.py.
+        payload.update(current_context())
 
         for key, value in record.__dict__.items():
             if key not in _RESERVED_LOG_RECORD_ATTRS:

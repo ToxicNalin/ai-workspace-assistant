@@ -199,3 +199,90 @@ ICS_FOLD_OCTETS = 75
 # that is configured (SPEC-v2 D16).
 RESEND_API_URL = "https://api.resend.com/emails"
 RESEND_TIMEOUT_SECONDS = 15.0
+
+
+# --- Step 8: streaming, limits and admin ---------------------------------
+
+
+class UsageKind(StrEnum):
+    """What spent the tokens.
+
+    Recorded per call rather than aggregated, because the two questions worth
+    asking of a bill are different shapes: "what did this workspace spend
+    today" is a sum, and "what spent it" is a group-by. Aggregating on write
+    answers only the first.
+    """
+
+    CHAT = "chat"
+    AGENT = "agent"
+    EMBEDDING = "embedding"
+
+
+class RateLimitScope(StrEnum):
+    """Which limit a counter belongs to.
+
+    Registration is separate from ordinary requests because SPEC-v2 §7 wants a
+    per-IP cap on account creation specifically, and folding it into the
+    general request limit would make one an accident of the other: sixty
+    requests a minute would permit sixty accounts a minute.
+    """
+
+    REQUEST = "request"
+    REGISTER = "register"
+
+
+# Fixed windows, not a sliding log. A sliding window needs a row per request;
+# a fixed window needs one row per bucket per window and answers the only
+# question being asked ("has this identity had too many this minute") in a
+# single upsert. The cost is a burst spanning a window boundary can briefly
+# reach twice the limit, which at portfolio scale is not the threat.
+RATE_LIMIT_WINDOW_SECONDS = 60
+REGISTRATION_WINDOW_SECONDS = 3600
+
+# Counters for elapsed windows are dead the moment the clock passes them --
+# nothing ever reads them again. Left alone they would grow forever inside
+# Neon's 0.5 GB, so a small fraction of requests also sweeps up what has
+# expired. Probabilistic rather than scheduled: it needs no extra task, and
+# with one sweep in every two hundred requests the table cannot outrun it.
+RATE_LIMIT_PRUNE_PROBABILITY = 0.005
+RATE_LIMIT_RETENTION_SECONDS = 24 * 60 * 60
+
+# Paths the request limiter never touches. /health is the important one: it is
+# pinged every ten minutes to keep Render warm and must not reach Postgres, or
+# the keep-warm cron burns the 100 CU-hours Neon's free tier allows
+# (SPEC-v2 §7, gotcha 3). The docs routes are exempt because a reviewer
+# clicking around OpenAPI is not abuse.
+RATE_LIMIT_EXEMPT_PATHS = frozenset({"/health", "/docs", "/redoc", "/openapi.json"})
+
+# Roughly four characters to a token across English text and the tokenisers in
+# common use. Only ever used where a provider declines to report real usage --
+# see app/ai/chat_model.py. An estimate that is off by a fifth still bounds a
+# bill; no estimate at all does not.
+CHARS_PER_TOKEN_ESTIMATE = 4
+
+# How many usage rows the admin view aggregates over, and how far back the
+# daily budget looks. A "day" here is a rolling 24 hours rather than a
+# calendar day: it needs no timezone decision, and it cannot be gamed by
+# waiting for midnight in whichever zone the server happens to think it is in.
+USAGE_BUDGET_WINDOW_SECONDS = 24 * 60 * 60
+ADMIN_USAGE_DEFAULT_DAYS = 7
+
+
+# --- Step 9: the browser client ------------------------------------------
+
+# SPEC-v2 D19: the access token lives in a JavaScript variable and the refresh
+# token lives here, where no script can read it. Splitting them that way is
+# what confines the cookie's problems -- CSRF, and needing SameSite=None
+# because the SPA and the API are different sites -- to one endpoint.
+REFRESH_COOKIE_NAME = "refresh_token"
+
+# Narrower than "/" deliberately. /auth/refresh and /auth/logout are the only
+# routes that read it, so no other request in the application carries a
+# long-lived credential it has no use for.
+REFRESH_COOKIE_PATH = "/auth"
+
+# The client echoes this back from the login response body. The value it must
+# match is a claim *inside* the refresh token, so the header and the cookie
+# cannot be sourced separately -- see app/auth/cookies.py.
+CSRF_HEADER_NAME = "X-CSRF-Token"
+CSRF_TOKEN_BYTES = 32

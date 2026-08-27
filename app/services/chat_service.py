@@ -1,19 +1,27 @@
 import uuid
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from dataclasses import dataclass, field
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.chat_model import ChatModel
+from app.ai.chat_model import ChatModel, Usage, estimate_tokens
 from app.ai.embeddings.embedder import Embedder
 from app.ai.prompts.rag import build_user_message
 from app.ai.prompts.system import SYSTEM_PROMPT
 from app.ai.retriever import hybrid
 from app.ai.retriever.base import RetrievedChunk
-from app.constants import CHAT_TITLE_MAX_CHARS, CITATION_QUOTE_CHARS, ChatRole
+from app.constants import (
+    CHAT_TITLE_MAX_CHARS,
+    CITATION_QUOTE_CHARS,
+    ChatRole,
+    UsageKind,
+)
 from app.database.models.chat import ChatMessage, ChatThread
 from app.database.models.citation import MessageCitation
 from app.exceptions import NotFound
+from app.services import usage_service
 
 
 def _derive_title(question: str) -> str:
@@ -98,55 +106,81 @@ def _to_citation(
     )
 
 
-async def answer_question(
+async def ensure_within_budget(db: AsyncSession, workspace_id: uuid.UUID) -> None:
+    """Refuse before anything is spent.
+
+    Exposed here so a route can check the budget without importing the usage
+    service to do it, and so the check happens before an SSE response has been
+    opened -- once the stream is running the only way to report this would be
+    an error event inside a 200, which no HTTP client retries correctly.
+    """
+    await usage_service.enforce_budget(db, workspace_id)
+
+
+async def _open_thread(
     db: AsyncSession,
-    embedder: Embedder,
-    chat_model: ChatModel,
     *,
     workspace_id: uuid.UUID,
     user_id: uuid.UUID,
     question: str,
-    thread_id: uuid.UUID | None = None,
-) -> tuple[ChatThread, ChatMessage, list[MessageCitation]]:
-    """Resolve thread, retrieve, prompt, answer, persist.
-
-    The ordering matters: retrieval is scoped to `workspace_id` before the
-    model is ever involved, so there is no path by which the model's output
-    can widen what it is allowed to see.
-    """
+    thread_id: uuid.UUID | None,
+) -> ChatThread:
     if thread_id is None:
         thread = ChatThread(
             workspace_id=workspace_id, user_id=user_id, title=_derive_title(question)
         )
         db.add(thread)
         await db.flush()
-    else:
-        thread = await get_thread(db, workspace_id, thread_id)
+        return thread
 
-    db.add(
-        ChatMessage(
+    return await get_thread(db, workspace_id, thread_id)
+
+
+async def _retrieve(
+    db: AsyncSession,
+    embedder: Embedder,
+    *,
+    workspace_id: uuid.UUID,
+    user_id: uuid.UUID,
+    question: str,
+) -> list[RetrievedChunk]:
+    """Embed the question, search this workspace, and bill the embedding.
+
+    The embedding call is small but it is not free, and leaving it out of the
+    ledger would mean the daily budget quietly under-counts every question
+    ever asked. The provider returns vectors rather than token counts, so this
+    one is necessarily an estimate.
+    """
+    query_embedding = await embedder.embed_query(question)
+    usage_service.record(
+        db,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        kind=UsageKind.EMBEDDING,
+        model=embedder.model_name,
+        tokens_in=estimate_tokens(question),
+        tokens_out=0,
+        estimated=True,
+    )
+
+    return list(
+        await hybrid.search(
+            db,
             workspace_id=workspace_id,
-            thread_id=thread.id,
-            user_id=user_id,
-            role=ChatRole.USER,
-            content=question,
+            query=question,
+            query_embedding=query_embedding,
         )
     )
 
-    query_embedding = await embedder.embed_query(question)
-    chunks = await hybrid.search(
-        db,
-        workspace_id=workspace_id,
-        query=question,
-        query_embedding=query_embedding,
-    )
 
-    answer = await chat_model.complete(
-        system=SYSTEM_PROMPT,
-        # Retrieved text goes here, in the user turn, and nowhere else.
-        user=build_user_message(question=question, chunks=chunks),
-    )
-
+async def _persist_answer(
+    db: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    thread: ChatThread,
+    answer: str,
+    chunks: Sequence[RetrievedChunk],
+) -> tuple[ChatMessage, list[MessageCitation]]:
     message = ChatMessage(
         workspace_id=workspace_id,
         thread_id=thread.id,
@@ -162,6 +196,73 @@ async def answer_question(
         for chunk in chunks
     ]
     db.add_all(citations)
+    return message, citations
+
+
+async def answer_question(
+    db: AsyncSession,
+    embedder: Embedder,
+    chat_model: ChatModel,
+    *,
+    workspace_id: uuid.UUID,
+    user_id: uuid.UUID,
+    question: str,
+    thread_id: uuid.UUID | None = None,
+) -> tuple[ChatThread, ChatMessage, list[MessageCitation]]:
+    """Resolve thread, retrieve, prompt, answer, persist.
+
+    The ordering matters twice over. Retrieval is scoped to `workspace_id`
+    before the model is ever involved, so there is no path by which the
+    model's output can widen what it is allowed to see -- and the budget is
+    checked before any of it, so a workspace that has spent its allowance
+    costs this deployment one aggregate query rather than an embedding call
+    and a completion.
+    """
+    await ensure_within_budget(db, workspace_id)
+
+    thread = await _open_thread(
+        db,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        question=question,
+        thread_id=thread_id,
+    )
+
+    db.add(
+        ChatMessage(
+            workspace_id=workspace_id,
+            thread_id=thread.id,
+            user_id=user_id,
+            role=ChatRole.USER,
+            content=question,
+        )
+    )
+
+    chunks = await _retrieve(
+        db, embedder, workspace_id=workspace_id, user_id=user_id, question=question
+    )
+
+    completion = await chat_model.complete(
+        system=SYSTEM_PROMPT,
+        # Retrieved text goes here, in the user turn, and nowhere else.
+        user=build_user_message(question=question, chunks=chunks),
+    )
+    answer = completion.text
+
+    usage_service.record(
+        db,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        kind=UsageKind.CHAT,
+        model=chat_model.model_name,
+        tokens_in=completion.usage.tokens_in,
+        tokens_out=completion.usage.tokens_out,
+        estimated=completion.usage.estimated,
+    )
+
+    message, citations = await _persist_answer(
+        db, workspace_id=workspace_id, thread=thread, answer=answer, chunks=chunks
+    )
 
     await db.commit()
     await db.refresh(thread)
@@ -170,3 +271,118 @@ async def answer_question(
         await db.refresh(citation)
 
     return thread, message, citations
+
+
+@dataclass
+class StreamEvent:
+    """One server-sent event, before it is encoded.
+
+    The service decides what happens and in what order; app/api/chat.py
+    decides how that becomes SSE on the wire. Keeping the split means the
+    ordering guarantee below is testable without an HTTP client.
+    """
+
+    event: str
+    data: dict[str, Any] = field(default_factory=dict)
+
+
+async def stream_answer(
+    db: AsyncSession,
+    embedder: Embedder,
+    chat_model: ChatModel,
+    *,
+    workspace_id: uuid.UUID,
+    user_id: uuid.UUID,
+    question: str,
+    thread_id: uuid.UUID | None = None,
+) -> AsyncIterator[StreamEvent]:
+    """The same conversation as answer_question, delivered as it is produced.
+
+    The event order is a contract the frontend depends on:
+
+      meta       once, first -- carries the thread id, so a client that just
+                 started a new conversation can attach to it before the answer
+                 has finished arriving
+      token      zero or more, in order
+      citations  once, after the last token -- they cannot be sent earlier
+                 without claiming an answer cites something it had not said yet
+      done       once, last, carrying the persisted message id
+
+    Nothing is written until the model has finished. A half-streamed answer
+    that the client abandoned is not an answer, and persisting one would put
+    truncated text in the thread history and bill the workspace for it.
+    """
+    await ensure_within_budget(db, workspace_id)
+
+    thread = await _open_thread(
+        db,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        question=question,
+        thread_id=thread_id,
+    )
+    db.add(
+        ChatMessage(
+            workspace_id=workspace_id,
+            thread_id=thread.id,
+            user_id=user_id,
+            role=ChatRole.USER,
+            content=question,
+        )
+    )
+
+    yield StreamEvent(event="meta", data={"thread_id": str(thread.id)})
+
+    chunks = await _retrieve(
+        db, embedder, workspace_id=workspace_id, user_id=user_id, question=question
+    )
+
+    collected: list[str] = []
+    usage = Usage(tokens_in=0, tokens_out=0, estimated=True)
+
+    async for piece in chat_model.stream(
+        system=SYSTEM_PROMPT,
+        user=build_user_message(question=question, chunks=chunks),
+    ):
+        if piece.usage is not None:
+            usage = piece.usage
+        if piece.text:
+            collected.append(piece.text)
+            yield StreamEvent(event="token", data={"text": piece.text})
+
+    answer = "".join(collected)
+
+    usage_service.record(
+        db,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        kind=UsageKind.CHAT,
+        model=chat_model.model_name,
+        tokens_in=usage.tokens_in,
+        tokens_out=usage.tokens_out,
+        estimated=usage.estimated,
+    )
+
+    message, citations = await _persist_answer(
+        db, workspace_id=workspace_id, thread=thread, answer=answer, chunks=chunks
+    )
+    await db.commit()
+
+    yield StreamEvent(
+        event="citations",
+        data={
+            "citations": [
+                {
+                    "document_name": citation.document_name,
+                    "quoted_text": citation.quoted_text,
+                    "page_no": citation.page_no,
+                    "score": citation.score,
+                }
+                for citation in citations
+            ]
+        },
+    )
+    yield StreamEvent(
+        event="done",
+        data={"thread_id": str(thread.id), "message_id": str(message.id)},
+    )

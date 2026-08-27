@@ -4,11 +4,13 @@ import uuid
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.chat_model import estimate_tokens
 from app.ai.chunking.splitter import extract_pages, split_pages
 from app.ai.embeddings.embedder import Embedder
-from app.constants import DocumentStatus
+from app.constants import DocumentStatus, UsageKind
 from app.database.models.chunk import DocumentChunk
 from app.database.models.document import Document
+from app.services import usage_service
 from app.storage.base import ObjectStore
 
 logger = logging.getLogger(__name__)
@@ -68,6 +70,22 @@ async def ingest_document(
             )
             for chunk, vector in zip(chunks, vectors, strict=True)
         ]
+    )
+
+    # Embedding a corpus is the largest single piece of token spend in this
+    # application, and leaving it out of the ledger would make /admin/usage
+    # report a number that bears no relation to the bill. Attributed to the
+    # uploader, and counted again on a re-ingest -- because a re-ingest really
+    # does embed everything a second time.
+    usage_service.record(
+        db,
+        workspace_id=document.workspace_id,
+        user_id=document.uploaded_by,
+        kind=UsageKind.EMBEDDING,
+        model=embedder.model_name,
+        tokens_in=sum(estimate_tokens(chunk.text) for chunk in chunks),
+        tokens_out=0,
+        estimated=True,
     )
 
     document.status = DocumentStatus.READY
