@@ -38,9 +38,12 @@ build
 # Local object storage, used when STORAGE_BACKEND=local
 .data
 
-# Frontend (Step 9) -- built and deployed separately to Cloudflare Pages
+# Frontend (Step 9). The whole directory, not just its build output: this
+# image is the API alone, the SPA is built by Cloudflare Pages from the same
+# repo, and the Dockerfile never copies any of it. Sending it anyway would only
+# make the build context bigger on a free tier that is already slow.
+frontend
 node_modules
-frontend/dist
 
 # Editors and OS
 .vscode

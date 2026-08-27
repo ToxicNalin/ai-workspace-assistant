@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  api:
     runs-on: ubuntu-latest
 
     services:
@@ -54,3 +54,27 @@ jobs:
       - name: Retrieval evaluation
         continue-on-error: true
         run: python -m app.ai.eval.run_eval
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `npm run build` runs tsc --noEmit before vite, so this is the type
+      # check and the bundle in one step -- and a build that fails to produce
+      # a bundle is the thing Cloudflare Pages would fail on anyway.
+      - name: Type check and build
+        run: npm run build

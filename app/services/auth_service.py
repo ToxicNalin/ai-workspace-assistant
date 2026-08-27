@@ -1,13 +1,14 @@
 import uuid
+from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.cookies import new_csrf_token, verify_csrf
 from app.auth.jwt import create_access_token, create_refresh_token, decode_refresh_token
 from app.auth.password import hash_password, verify_password
 from app.database.models.user import User
 from app.exceptions import Conflict, Unauthorized
-from app.schemas.auth import TokenPair
 
 
 async def register(db: AsyncSession, *, email: str, password: str, name: str) -> User:
@@ -36,19 +37,44 @@ async def authenticate(db: AsyncSession, *, email: str, password: str) -> User:
     return user
 
 
-async def issue_tokens(db: AsyncSession, user: User) -> TokenPair:
+@dataclass(frozen=True)
+class IssuedTokens:
+    """One session's credentials, before the route decides how each travels.
+
+    They leave by three different routes -- access token in the body, refresh
+    token in an httpOnly cookie, CSRF value in the body again -- and that is a
+    transport decision, so it belongs in app/api/auth.py rather than here.
+    """
+
+    access_token: str
+    refresh_token: str
+    csrf_token: str
+
+
+async def issue_tokens(db: AsyncSession, user: User) -> IssuedTokens:
     jti = uuid.uuid4()
+    csrf = new_csrf_token()
     user.current_refresh_jti = jti
     await db.commit()
 
-    return TokenPair(
+    return IssuedTokens(
         access_token=create_access_token(user.id),
-        refresh_token=create_refresh_token(user.id, jti),
+        refresh_token=create_refresh_token(user.id, jti, csrf),
+        csrf_token=csrf,
     )
 
 
-async def rotate_refresh_token(db: AsyncSession, refresh_token: str) -> TokenPair:
+async def rotate_refresh_token(
+    db: AsyncSession, refresh_token: str, *, csrf_header: str | None
+) -> IssuedTokens:
+    """Exchange a refresh token for a fresh pair, invalidating the old one.
+
+    The CSRF check happens here, before the token is looked up, because the
+    claims it needs come out of the same decode -- and because a rotation that
+    the page's own script did not ask for is exactly what it is there to stop.
+    """
     payload = decode_refresh_token(refresh_token)
+    verify_csrf(refresh_claims=payload, header=csrf_header)
 
     try:
         user_id = uuid.UUID(payload["sub"])

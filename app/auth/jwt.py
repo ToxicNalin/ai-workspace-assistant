@@ -30,13 +30,24 @@ def create_access_token(user_id: uuid.UUID) -> str:
     return _encode(user_id, "access", timedelta(minutes=settings.access_token_expire_minutes))
 
 
-def create_refresh_token(user_id: uuid.UUID, jti: uuid.UUID) -> str:
+def create_refresh_token(user_id: uuid.UUID, jti: uuid.UUID, csrf: str) -> str:
+    """A refresh token, carrying the CSRF value it must be presented with.
+
+    The token travels in an httpOnly cookie the browser attaches on its own,
+    so possession of the cookie cannot be the whole of the authorisation --
+    any other site can cause the browser to send it. `csrf` is handed to the
+    client in the response *body* instead, and app/auth/cookies.py requires it
+    back in a header. Carrying it as a claim rather than storing it means the
+    two halves are minted together and rotate together: a header can only ever
+    match the cookie it was issued alongside.
+    """
     settings = get_settings()
     return _encode(
         user_id,
         "refresh",
         timedelta(days=settings.refresh_token_expire_days),
         jti=str(jti),
+        csrf=csrf,
     )
 
 

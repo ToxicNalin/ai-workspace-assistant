@@ -18,14 +18,25 @@ class LoginRequest(BaseModel):
     password: str
 
 
-class RefreshRequest(BaseModel):
-    refresh_token: str
+class SessionOut(BaseModel):
+    """What /auth/login and /auth/refresh hand back.
 
+    No refresh token. It is set as an httpOnly cookie instead (SPEC-v2 D19),
+    and returning a copy here would undo the point of that entirely: script
+    that can read this body can read it after calling /auth/refresh, which the
+    browser will happily authenticate from the cookie.
 
-class TokenPair(BaseModel):
+    `csrf_token` is not a credential on its own -- it is worthless without the
+    cookie -- and it has to be readable, because the client must echo it back
+    on the one endpoint the cookie authenticates. See app/auth/cookies.py.
+    """
+
     access_token: str
-    refresh_token: str
     token_type: str = "bearer"
+    csrf_token: str
+    # Seconds. Saves the client parsing a JWT it is not supposed to interpret
+    # just to know when to stop using the token.
+    expires_in: int
 
 
 class UserOut(ORMModel):
