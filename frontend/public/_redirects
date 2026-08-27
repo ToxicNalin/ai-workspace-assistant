@@ -1,4 +1,0 @@
-# Cloudflare Pages serves static files, so a deep link like /w/<id>/approvals
-# would 404 on a hard refresh -- there is no such file. Hand every unmatched
-# path to the SPA and let the router resolve it.
-/*    /index.html   200
