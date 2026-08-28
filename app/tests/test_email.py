@@ -26,12 +26,14 @@ from app.database.models.pending_action import PendingAction
 from app.exceptions import UpstreamFailure
 from app.services import email_service
 from app.services.email_service import (
+    BrevoEmailProvider,
     ConsoleEmailProvider,
     EmailAttachment,
     GmailEmailProvider,
     OutboundEmail,
     ResendEmailProvider,
     _refusal_reason,
+    get_email_provider,
 )
 from app.tests.factories import (
     auth_headers,
@@ -413,3 +415,122 @@ async def test_approving_a_send_in_an_undeliverable_production_deployment_fails(
     assert row is not None
     await db_session.refresh(row)
     assert row.status is PendingActionStatus.FAILED
+
+
+# --------------------------------------------------------------------------
+# Brevo.
+#
+# The second real provider, and the reason the interface was worth having:
+# sending to arbitrary recipients needs an authenticated domain everywhere
+# since 2024, and a free webmail domain cannot be authenticated by anyone. A
+# single verified sender address is the only free route to emailing people who
+# are not you.
+# --------------------------------------------------------------------------
+
+
+def test_the_brevo_payload_matches_brevos_field_names() -> None:
+    """Where the two providers disagree is the whole job of the adapter:
+    `sender` not `from`, objects not strings, `attachment` not `attachments`,
+    `name` not `filename`, `textContent` not `text`."""
+    provider = BrevoEmailProvider(
+        api_key="key", from_address="no-reply@example.com", from_name="Workspace"
+    )
+
+    payload = provider._payload(
+        OutboundEmail(
+            to=["bob@example.com", "carol@example.com"],
+            subject="Invitation: Review",
+            body="Body text.",
+            reply_to="alice@example.com",
+            attachments=[
+                EmailAttachment(
+                    filename="invitation.ics",
+                    content=b"BEGIN:VCALENDAR",
+                    content_type="text/calendar",
+                )
+            ],
+        )
+    )
+
+    assert payload["sender"] == {"email": "no-reply@example.com", "name": "Workspace"}
+    assert payload["to"] == [{"email": "bob@example.com"}, {"email": "carol@example.com"}]
+    assert payload["subject"] == "Invitation: Review"
+    assert payload["textContent"] == "Body text."
+    assert payload["replyTo"] == {"email": "alice@example.com"}
+    assert payload["attachment"] == [
+        {
+            "name": "invitation.ics",
+            "content": base64.b64encode(b"BEGIN:VCALENDAR").decode("ascii"),
+        }
+    ]
+
+
+def test_the_brevo_sender_name_is_capped() -> None:
+    """Brevo rejects the whole request over 70 characters, which would be an
+    odd way to lose an email."""
+    provider = BrevoEmailProvider(
+        api_key="key", from_address="no-reply@example.com", from_name="N" * 200
+    )
+
+    payload = provider._payload(OutboundEmail(to=["bob@example.com"], subject="s", body="b"))
+
+    assert len(payload["sender"]["name"]) == 70
+
+
+def test_an_omitted_reply_to_and_no_attachments_are_left_out_entirely() -> None:
+    """Brevo validates the shape of these keys, so an empty list or a null is
+    not the same as their absence."""
+    provider = BrevoEmailProvider(
+        api_key="key", from_address="no-reply@example.com", from_name=""
+    )
+
+    payload = provider._payload(OutboundEmail(to=["bob@example.com"], subject="s", body="b"))
+
+    assert "replyTo" not in payload
+    assert "attachment" not in payload
+    assert payload["sender"] == {"email": "no-reply@example.com"}
+
+
+async def test_brevo_without_a_key_refuses_rather_than_posting() -> None:
+    provider = BrevoEmailProvider(api_key="", from_address="x@example.com", from_name="")
+
+    with pytest.raises(UpstreamFailure):
+        await provider.send(OutboundEmail(to=["bob@example.com"], subject="s", body="b"))
+
+
+def test_the_selected_provider_follows_the_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_email_provider is lru_cached, so this asks the question the cache
+    would otherwise hide: that each setting maps to the class it names."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "brevo_api_key", "key")
+    monkeypatch.setattr(settings, "resend_api_key", "key")
+
+    for name, expected in (
+        ("console", ConsoleEmailProvider),
+        ("resend", ResendEmailProvider),
+        ("brevo", BrevoEmailProvider),
+    ):
+        monkeypatch.setattr(settings, "email_provider", name)
+        get_email_provider.cache_clear()
+        assert isinstance(get_email_provider(), expected)
+
+    get_email_provider.cache_clear()
+
+
+def test_brevo_without_a_key_is_reported_undeliverable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The status endpoint has to answer for whichever provider is selected --
+    a deployment reporting itself configured while every send raises is the
+    failure this whole file exists to prevent."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "email_provider", "brevo")
+    monkeypatch.setattr(settings, "brevo_api_key", "")
+
+    assert email_service.provider_is_configured() is False
+    reason = email_service.undeliverable_reason()
+    assert reason is not None and "BREVO_API_KEY" in reason
+
+    monkeypatch.setattr(settings, "brevo_api_key", "xkeysib-key")
+    assert email_service.provider_is_configured() is True
+    assert email_service.undeliverable_reason() is None

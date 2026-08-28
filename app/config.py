@@ -83,8 +83,17 @@ class Settings(BaseSettings):
     # sending, so a fresh clone can drive an approved action end to end with
     # no API key, no network and nothing arriving in a stranger's inbox.
     # Production sets resend (SPEC-v2 D16: gmail.send is a restricted scope).
-    email_provider: Literal["console", "resend"] = "console"
+    email_provider: Literal["console", "resend", "brevo"] = "console"
     resend_api_key: str = ""
+    # Brevo exists here because Resend, like every provider since Gmail and
+    # Yahoo tightened sender rules in 2024, will only send to arbitrary
+    # recipients from an authenticated domain -- and a free webmail domain
+    # cannot be authenticated by anyone. Brevo sends from a single address
+    # verified by a code, which is the only route to mailing real people
+    # without owning a domain. It pays for that by rewriting the visible
+    # `From:` to a compliant address of its own; `Reply-To:` survives, so the
+    # person who asked for the action still gets the reply (SPEC-v2 D16).
+    brevo_api_key: str = ""
     # Resend will only send from a verified domain, with the exception of its
     # own onboarding sender -- which is what makes a £0 demo possible.
     email_from_address: str = "onboarding@resend.dev"

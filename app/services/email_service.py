@@ -22,7 +22,12 @@ from typing import Any, Protocol
 import httpx
 
 from app.config import get_settings
-from app.constants import RESEND_API_URL, RESEND_TIMEOUT_SECONDS
+from app.constants import (
+    BREVO_API_URL,
+    BREVO_TIMEOUT_SECONDS,
+    RESEND_API_URL,
+    RESEND_TIMEOUT_SECONDS,
+)
 from app.exceptions import UpstreamFailure
 
 logger = logging.getLogger(__name__)
@@ -194,6 +199,98 @@ class ResendEmailProvider:
         )
 
 
+class BrevoEmailProvider:
+    """Brevo's transactional API. Same shape as Resend, different JSON.
+
+    Here for one reason: it is the only free route to emailing people who are
+    not you. Since Gmail, Yahoo and Microsoft tightened sender requirements in
+    2024, sending to arbitrary recipients needs an authenticated sending
+    domain, and a free webmail domain cannot be authenticated by anybody --
+    so `onboarding@resend.dev` and `something@gmail.com` are both dead ends for
+    a project with no domain of its own.
+
+    Brevo takes a single address verified by a code instead. The cost is that
+    it rewrites the visible `From:` to a compliant address of its own when the
+    sender is free webmail. That is a real downgrade in polish and worth being
+    honest about -- but `Reply-To:` survives it, which is the header actually
+    carrying the person who asked for the action (SPEC-v2 D16).
+
+    Verifying a domain and switching back to Resend is two values in a
+    dashboard, and nothing above this class changes. That interchangeability
+    was the point of the interface long before there was a second provider to
+    prove it.
+    """
+
+    name = "brevo"
+
+    def __init__(self, *, api_key: str, from_address: str, from_name: str) -> None:
+        self._api_key = api_key
+        self._from_address = from_address
+        self._from_name = from_name
+
+    def _payload(self, message: OutboundEmail) -> dict[str, Any]:
+        sender: dict[str, str] = {"email": self._from_address}
+        if self._from_name:
+            # Brevo caps the display name at 70 characters and rejects the
+            # whole request over it, which would be an odd way to lose an
+            # email.
+            sender["name"] = self._from_name[:70]
+
+        payload: dict[str, Any] = {
+            "sender": sender,
+            "to": [{"email": address} for address in message.to],
+            "subject": message.subject,
+            "textContent": message.body,
+        }
+        if message.reply_to:
+            payload["replyTo"] = {"email": message.reply_to}
+        if message.attachments:
+            # Singular "attachment", and "name" rather than "filename" -- the
+            # two providers disagree on both, which is exactly the sort of
+            # detail that belongs in one adapter rather than in the caller.
+            payload["attachment"] = [
+                {
+                    "name": item.filename,
+                    "content": base64.b64encode(item.content).decode("ascii"),
+                }
+                for item in message.attachments
+            ]
+        return payload
+
+    async def send(self, message: OutboundEmail) -> SentEmail:
+        if not self._api_key:
+            raise UpstreamFailure("The email provider is not configured")
+
+        try:
+            async with httpx.AsyncClient(timeout=BREVO_TIMEOUT_SECONDS) as http:
+                response = await http.post(
+                    BREVO_API_URL,
+                    headers={"api-key": self._api_key, "accept": "application/json"},
+                    json=self._payload(message),
+                )
+        except httpx.HTTPError as exc:
+            logger.warning("email provider unreachable", extra={"error": type(exc).__name__})
+            raise UpstreamFailure("The email provider could not be reached") from exc
+
+        if response.status_code >= 400:
+            reason = _refusal_reason(response)
+            logger.warning(
+                "email provider refused the message",
+                extra={"status": response.status_code, "reason": reason},
+            )
+            raise UpstreamFailure(
+                f"The email provider refused the message ({response.status_code})"
+                + (f": {reason}" if reason else "")
+            )
+
+        body = response.json()
+        return SentEmail(
+            provider=self.name,
+            message_id=str(body.get("messageId", "")),
+            recipients=list(message.to),
+        )
+
+
 class GmailEmailProvider:
     """Not shipped. Kept as a class so the blocker is documented in code.
 
@@ -229,6 +326,13 @@ def get_email_provider() -> EmailProvider:
             from_name=settings.email_from_name,
         )
 
+    if settings.email_provider == "brevo":
+        return BrevoEmailProvider(
+            api_key=settings.brevo_api_key,
+            from_address=settings.email_from_address,
+            from_name=settings.email_from_name,
+        )
+
     return ConsoleEmailProvider()
 
 
@@ -236,11 +340,33 @@ def provider_is_configured() -> bool:
     """Whether the selected provider could actually deliver a message.
 
     The console provider always can -- delivering to a list in memory is what
-    it does. Resend cannot without a key, and saying so on `/email/status` is
-    better than finding out at the moment somebody approves an action.
+    it does. The real ones cannot without a key, and saying so on
+    `/email/status` is better than finding out at the moment somebody approves
+    an action.
+    """
+    return _missing_api_key() is None
+
+
+def _missing_api_key() -> str | None:
+    """The name of the key the selected provider needs and has not been given.
+
+    One function so that adding a provider cannot leave `/email/status`
+    answering for the old one -- the failure that would produce is a
+    deployment reporting itself configured while every send raises.
     """
     settings = get_settings()
-    return settings.email_provider != "resend" or bool(settings.resend_api_key)
+    required = {"resend": "RESEND_API_KEY", "brevo": "BREVO_API_KEY"}.get(
+        settings.email_provider
+    )
+    if required is None:
+        return None
+
+    key = {"resend": settings.resend_api_key, "brevo": settings.brevo_api_key}[
+        settings.email_provider
+    ]
+    if key:
+        return None
+    return f"{required} is not set, so the email provider cannot authenticate."
 
 
 def undeliverable_reason() -> str | None:
@@ -262,11 +388,9 @@ def undeliverable_reason() -> str | None:
     if settings.email_provider == "console":
         return (
             "EMAIL_PROVIDER is 'console', which records messages instead of sending them. "
-            "Set EMAIL_PROVIDER=resend and RESEND_API_KEY to deliver mail."
+            "Set EMAIL_PROVIDER to a real provider, with its API key, to deliver mail."
         )
-    if not settings.resend_api_key:
-        return "RESEND_API_KEY is not set, so the email provider cannot authenticate."
-    return None
+    return _missing_api_key()
 
 
 def delivery_blocked() -> str | None:

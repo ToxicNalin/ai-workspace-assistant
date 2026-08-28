@@ -436,14 +436,24 @@ nothing against Neon's 100 compute-hours.
 
 **Mail has two traps, and both are silent.** `EMAIL_PROVIDER` defaults to
 `console`, which records messages instead of sending them — exactly right for a
-fresh clone, and a deployment that forgets to set `resend` reports every
-approved email as sent while none of them exist. In production the app now
-refuses such an action outright (`failed`, with the reason) and logs a warning
-at boot, but the fix is the dashboard: set `EMAIL_PROVIDER=resend` and
-`RESEND_API_KEY`. Then the second trap — the default sender
-`onboarding@resend.dev` will only deliver to the address the Resend account was
-registered with, and refuses anything else with a 403. Verify a domain in
-Resend and set `EMAIL_FROM_ADDRESS` to it before mailing anyone else.
+fresh clone, and a deployment that forgets to set a real provider reports every
+approved email as sent while none of them exist. In production the app refuses
+such an action outright (`failed`, with the reason) and logs a warning at boot,
+but the fix is the dashboard. Then the second trap: **who you are allowed to
+email is decided by whether you own a domain.** Since Gmail, Yahoo and
+Microsoft tightened sender requirements in 2024, mailing arbitrary recipients
+requires an authenticated sending domain, and free webmail domains cannot be
+authenticated by anyone. Hence two real providers behind one interface:
+
+| | Needs | Will mail | Cost of that |
+| --- | --- | --- | --- |
+| `resend` | a verified domain | anyone, from your own address | without a domain, only the account holder's own address |
+| `brevo` | a single sender address, verified by emailed code | anyone | rewrites the visible `From:` to its own compliant address when the sender is free webmail |
+
+Neither is better in the abstract — Resend is the right answer the moment a
+domain exists, and Brevo is the only free route until then. Swapping is two
+values in a dashboard and no code, which is what
+[SPEC-v2 D16](docs/SPEC-v2.md) was for.
 `GET /workspaces/{id}/email/status` answers both questions from a live
 deployment.
 

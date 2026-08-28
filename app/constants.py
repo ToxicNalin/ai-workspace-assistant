@@ -202,11 +202,14 @@ ICS_PRODID = "-//AI Workspace Assistant//Agent//EN"
 # RFC 5545 §3.1: content lines are folded at 75 octets, excluding the CRLF.
 ICS_FOLD_OCTETS = 75
 
-# Resend's REST endpoint. Named here rather than in the service so the one
-# outbound URL this application posts to is visible next to everything else
-# that is configured (SPEC-v2 D16).
+# The mail providers' REST endpoints. Named here rather than in the service so
+# every outbound URL this application posts to is visible next to everything
+# else that is configured (SPEC-v2 D16).
 RESEND_API_URL = "https://api.resend.com/emails"
 RESEND_TIMEOUT_SECONDS = 15.0
+
+BREVO_API_URL = "https://api.brevo.com/v3/smtp/email"
+BREVO_TIMEOUT_SECONDS = 15.0
 
 
 # --- Step 8: streaming, limits and admin ---------------------------------
