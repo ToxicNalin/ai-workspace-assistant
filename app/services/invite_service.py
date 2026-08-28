@@ -78,10 +78,13 @@ async def create_invite(
     invited_by: User,
     email: str,
     role: WorkspaceRole,
-) -> tuple[WorkspaceInvite, str, bool]:
+) -> tuple[WorkspaceInvite, str, str | None]:
     """Create an invite and email the link to it.
 
-    Returns the invite, the raw token, and whether the email was delivered.
+    Returns the invite, the raw token, and why the email did not go out --
+    None if it did. A boolean was not enough: "not sent" has two causes that
+    need different actions from the admin, and a UI that has to guess between
+    them will state the wrong one with total confidence.
 
     The send is deliberately *after* the commit and deliberately not allowed to
     fail the request. An invite that exists but was not emailed is recoverable
@@ -116,7 +119,7 @@ async def create_invite(
             "invite created but this deployment cannot send email",
             extra={"invite_id": str(invite.id), "reason": blocked},
         )
-        return invite, raw_token, False
+        return invite, raw_token, blocked
 
     workspace = await db.get(Workspace, workspace_id)
     message = build_invite_email(
@@ -135,9 +138,9 @@ async def create_invite(
             "invite created but the email could not be sent",
             extra={"invite_id": str(invite.id), "reason": str(exc.detail)},
         )
-        return invite, raw_token, False
+        return invite, raw_token, str(exc.detail)
 
-    return invite, raw_token, True
+    return invite, raw_token, None
 
 
 async def accept_invite(db: AsyncSession, *, raw_token: str, user: User) -> WorkspaceMember:

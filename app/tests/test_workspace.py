@@ -255,6 +255,7 @@ async def test_creating_an_invite_emails_the_link(
 
     assert response.status_code == 201
     assert response.json()["email_sent"] is True
+    assert response.json()["email_error"] is None
 
     assert len(outbox.outbox) == 1
     message = outbox.outbox[0]
@@ -306,6 +307,10 @@ async def test_an_invite_survives_the_email_failing(
 
     assert response.status_code == 201
     assert response.json()["email_sent"] is False
+    # The provider's own words reach the admin. Without them the UI has to
+    # guess between "no mail provider" and "this recipient was refused", which
+    # need different responses and cannot be told apart from a boolean.
+    assert response.json()["email_error"] == "The email provider could not be reached"
     token = response.json()["token"]
     assert token
 
@@ -341,5 +346,6 @@ async def test_a_production_deployment_that_cannot_send_says_so(
 
     assert response.status_code == 201
     assert response.json()["email_sent"] is False
+    assert "EMAIL_PROVIDER" in response.json()["email_error"]
     assert response.json()["token"]
     assert outbox.outbox == []

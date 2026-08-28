@@ -316,6 +316,17 @@ a:focus-visible,
   min-width: 0;
 }
 
+/* A provider's own explanation, quoted inside a banner. Its own line and
+   slightly dimmed: it is evidence rather than prose, and it reads as a
+   different voice from the sentence above it -- because it is one. */
+.banner__detail {
+  display: block;
+  margin-top: 0.4rem;
+  opacity: 0.85;
+  font-size: 0.88rem;
+  overflow-wrap: anywhere;
+}
+
 .banner__close {
   border: 0;
   background: none;

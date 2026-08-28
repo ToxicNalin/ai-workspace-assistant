@@ -72,6 +72,8 @@ export interface Invite {
    * link above is the only copy there is.
    */
   email_sent: boolean | null;
+  /** Why it did not go out, from the server. Never guess this locally. */
+  email_error: string | null;
 }
 
 export interface Document {

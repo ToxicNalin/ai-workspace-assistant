@@ -190,8 +190,15 @@ function InviteDialog({ open, onClose }: { open: boolean; onClose: () => void })
           {created.email_sent === false ? (
             <Banner tone="warning">
               Invite created for <strong>{created.email}</strong>, but the invitation
-              email could not be sent — this deployment has no working mail provider.
-              Send them the link below yourself. It expires {formatDate(created.expires_at)}.
+              email could not be sent. Send them the link below yourself. It expires{" "}
+              {formatDate(created.expires_at)}.
+              {/* The server's own words. Naming a cause here rather than
+                  reporting one would be a guess between two failures that
+                  need different responses -- and a confident wrong guess is
+                  worse than no explanation at all. */}
+              {created.email_error ? (
+                <span className="banner__detail">{created.email_error}</span>
+              ) : null}
             </Banner>
           ) : (
             <Banner tone="success">

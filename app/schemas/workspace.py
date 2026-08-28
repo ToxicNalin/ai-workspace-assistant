@@ -47,6 +47,12 @@ class InviteOut(ORMModel):
     # so the token above is the only copy of the link there is and the admin
     # has to pass it on themselves.
     email_sent: bool | None = None
+    # Why it did not. "Not sent" has two causes needing different responses --
+    # a deployment with no mail provider is fixed in a dashboard, a provider
+    # refusing one recipient is not -- and only the server knows which. Passing
+    # the reason on is the same rule the provider layer follows: the component
+    # that learns why a thing failed is the one that must say so.
+    email_error: str | None = None
 
 
 class InviteAccept(BaseModel):

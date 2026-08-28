@@ -81,7 +81,7 @@ async def create_invite(
     db: DbSession,
     context: Annotated[WorkspaceContext, Depends(require_admin)],
 ) -> InviteOut:
-    invite, raw_token, email_sent = await invite_service.create_invite(
+    invite, raw_token, email_error = await invite_service.create_invite(
         db,
         mailer=get_email_provider(),
         workspace_id=context.workspace_id,
@@ -91,5 +91,6 @@ async def create_invite(
     )
     out = InviteOut.model_validate(invite)
     out.token = raw_token
-    out.email_sent = email_sent
+    out.email_sent = email_error is None
+    out.email_error = email_error
     return out
