@@ -96,6 +96,30 @@ async def create_invite(
     email = email.strip().lower()
     raw_token = secrets.token_urlsafe(32)
 
+    # Re-inviting supersedes rather than duplicating. `workspace_invites` has a
+    # partial unique index on (workspace_id, email) where status = pending, so
+    # a second offer to the same person is a UniqueViolation -- previously an
+    # unhandled 500, and in a browser an opaque network error, because a 500
+    # that escapes the stack carries no CORS headers.
+    #
+    # Superseding rather than refusing, because an invite is one offer to one
+    # address: asking again means "send it again", not "make a second one". It
+    # also leaves exactly one live token per person, so the link that stops
+    # working is the older one -- the direction you want a bearer credential to
+    # fail in.
+    superseded = await db.scalar(
+        select(WorkspaceInvite).where(
+            WorkspaceInvite.workspace_id == workspace_id,
+            WorkspaceInvite.email == email,
+            WorkspaceInvite.status == InviteStatus.PENDING,
+        )
+    )
+    if superseded is not None:
+        superseded.status = InviteStatus.REVOKED
+        # Flushed before the insert so the partial index sees the old row leave
+        # `pending` and the new one arrive in the same transaction.
+        await db.flush()
+
     invite = WorkspaceInvite(
         workspace_id=workspace_id,
         email=email,

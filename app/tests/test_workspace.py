@@ -349,3 +349,54 @@ async def test_a_production_deployment_that_cannot_send_says_so(
     assert "EMAIL_PROVIDER" in response.json()["email_error"]
     assert response.json()["token"]
     assert outbox.outbox == []
+
+
+async def test_re_inviting_the_same_address_supersedes_the_pending_invite(
+    db_session: AsyncSession, client: AsyncClient, outbox: ConsoleEmailProvider
+) -> None:
+    """`workspace_invites` has a partial unique index on (workspace_id, email)
+    where status = pending, so a second offer to the same person used to be an
+    unhandled UniqueViolation -- a 500, and in a browser an opaque network
+    error, since a 500 escaping the stack carries no CORS headers.
+
+    Asking again means "send it again", so the older invite is revoked and the
+    older token stops working. One live credential per person, and the one
+    that fails is the stale one."""
+    admin = await make_user(db_session, email="resender@example.com")
+    invitee = await make_user(db_session, email="reinvited@example.com")
+    workspace = await make_workspace(db_session, owner=admin)
+
+    first = await client.post(
+        f"/workspaces/{workspace.id}/invite",
+        json={"email": "reinvited@example.com", "role": "member"},
+        headers=auth_headers(admin),
+    )
+    assert first.status_code == 201
+    old_token = first.json()["token"]
+
+    second = await client.post(
+        f"/workspaces/{workspace.id}/invite",
+        json={"email": "reinvited@example.com", "role": "admin"},
+        headers=auth_headers(admin),
+    )
+    assert second.status_code == 201
+    new_token = second.json()["token"]
+    assert new_token != old_token
+    assert second.json()["email_sent"] is True
+    # Both invitations went out; the second is not a silent no-op.
+    assert len(outbox.outbox) == 2
+
+    # The superseded token is dead, and refused as NotFound rather than
+    # anything more specific -- a revoked token must not be distinguishable
+    # from one that never existed.
+    stale = await client.post(
+        "/workspaces/join", json={"token": old_token}, headers=auth_headers(invitee)
+    )
+    assert stale.status_code == 404
+
+    # The live one works, and carries the role from the second invite.
+    join = await client.post(
+        "/workspaces/join", json={"token": new_token}, headers=auth_headers(invitee)
+    )
+    assert join.status_code == 200
+    assert join.json()["role"] == "admin"
